@@ -110,7 +110,9 @@ void showServerSettingsWithValue(
 
     Widget buildField(
         String label, TextEditingController controller, String errorMsg,
-        {String? Function(String?)? validator, bool autofocus = false}) {
+        {String? Function(String?)? validator,
+        bool autofocus = false,
+        TextInputType? keyboardType}) {
       if (isDesktop || isWeb) {
         return Row(
           children: [
@@ -129,6 +131,7 @@ void showServerSettingsWithValue(
                 showLabelText: false,
                 validator: validator,
                 autofocus: autofocus,
+                keyboardType: keyboardType,
               ).workaroundFreezeLinuxMint(),
             ),
           ],
@@ -140,6 +143,7 @@ void showServerSettingsWithValue(
         controller: controller,
         errorMsg: errorMsg,
         validator: validator,
+        keyboardType: keyboardType,
       ).workaroundFreezeLinuxMint();
     }
 
@@ -190,7 +194,8 @@ void showServerSettingsWithValue(
                     ),
                   ),
                   SizedBox(height: 8),
-                  buildField('Key', keyCtrl, ''),
+                  buildField('Key', keyCtrl, '',
+                      keyboardType: TextInputType.visiblePassword),
                   if (isInProgress)
                     Padding(
                       padding: EdgeInsets.only(top: 8),
@@ -229,6 +234,7 @@ TextFormField serverSettingsTextFormField({
   bool autofocus = false,
   bool showLabelText = true,
   EdgeInsetsGeometry? contentPadding,
+  TextInputType? keyboardType,
 }) {
   return TextFormField(
     controller: controller,
@@ -239,7 +245,7 @@ TextFormField serverSettingsTextFormField({
     ),
     validator: validator,
     autofocus: autofocus,
-    keyboardType: TextInputType.visiblePassword,
+    keyboardType: keyboardType ?? plainKeyboardType,
     textCapitalization: TextCapitalization.none,
     autocorrect: false,
     enableSuggestions: false,

@@ -1,0 +1,64 @@
+name: Flutter Release Build
+
+# This repository has one entry point for the HarmonyOS leg, and it is manual: a commit does not
+# ship a build, because a push to the default branch used to submit the signed App Pack to
+# AppGallery Connect and cut a GitHub prerelease without anyone asking for it. The workflow still
+# calls the OpenHarmony workflow directly; a run leaves the signed App Pack and the unsigned HAP
+# as artifacts, and reaches AppGallery Connect, the prerelease, or both, only when the operator
+# ticks those inputs. The other platforms stay parked in flutter-build.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      publish-release:
+        description: "Publish the GitHub prerelease carrying the unsigned HAP"
+        type: boolean
+        default: false
+      upload-agc:
+        description: "Submit the signed App Pack to AppGallery Connect as a test version"
+        type: boolean
+        default: false
+      version:
+        description: "Version stamped into the artifact file names"
+        type: string
+        default: "1.5.0"
+
+# Two runs inside one build window would race for the same AppGallery Connect submission slot, so
+# queue them instead of cancelling or overlapping.
+concurrency:
+  group: flutter-release
+  cancel-in-progress: false
+
+jobs:
+  # The gate that caught the dependency regression: the committed pubspec has to stay on the
+  # values every leg resolves, so it runs before anything is built or submitted.
+  verify-dependency-state:
+    name: Verify the committed dependency state
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Verify the dependency selection
+        shell: bash
+        run: |
+          python3 scripts/test_prepare_ohos_flutter.py
+          python3 scripts/prepare-ohos-flutter.py --check
+
+  build-and-release:
+    needs: verify-dependency-state
+    uses: ./.github/workflows/flutter-ohos.yml
+    # The called workflow declares the token it needs: contents: write, for the prerelease a run
+    # can be asked to publish. Asking for it on the job that calls it keeps that request explicit
+    # instead of inheriting whatever default the repository's Actions settings carry, which a
+    # fresh fork has not proven; the dependency gate above keeps the narrower default.
+    permissions:
+      contents: write
+    secrets: inherit
+    with:
+      upload-artifact: true
+      # Every run is manual now, so an artifact build is what a run does by default: nothing is
+      # published unless the operator asked for the prerelease or the AppGallery Connect
+      # submission on the dispatch form. The dispatch inputs are read as strings, as they were for
+      # the run that proved this leg, so an unticked box stays false.
+      publish-release: ${{ github.event.inputs.publish-release == 'true' }}
+      upload-agc: ${{ github.event.inputs.upload-agc == 'true' }}
+      upload-tag: "nightly"
+      version: ${{ github.event.inputs.version || '1.5.0' }}

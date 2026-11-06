@@ -1,0 +1,83 @@
+
+{
+  "module": {
+    "name": "entry",
+    "type": "entry",
+    "description": "$string:module_desc",
+    "mainElement": "EntryAbility",
+    "deviceTypes": [
+      "phone",
+      "tablet",
+      "2in1"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false,
+    "pages": "$profile:main_pages",
+    "abilities": [
+      {
+        "name": "EntryAbility",
+        "srcEntry": "./ets/entryability/EntryAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:icon",
+        "startWindowBackground": "$color:start_window_background",
+        "launchType": "singleton",
+        "orientation": "auto_rotation_restricted",
+        "minWindowWidth": 640,
+        "minWindowHeight": 480,
+        "backgroundModes": [
+          "dataTransfer",
+          "audioRecording"
+        ],
+        "exported": true,
+        "skills": [
+          {
+            "entities": [
+              "entity.system.home"
+            ],
+            "actions": [
+              "action.system.home"
+            ]
+          }
+        ]
+      },
+      {
+        "name": "SessionAbility",
+        "srcEntry": "./ets/sessionability/SessionAbility.ets",
+        "description": "$string:EntryAbility_desc",
+        "icon": "$media:icon",
+        "label": "$string:EntryAbility_label",
+        "startWindowIcon": "$media:icon",
+        "startWindowBackground": "$color:start_window_background",
+        "launchType": "multiton",
+        "orientation": "auto_rotation_restricted",
+        "minWindowWidth": 640,
+        "minWindowHeight": 480,
+        "exported": false
+      }
+    ],
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.READ_PASTEBOARD",
+        "reason": "$string:READ_PASTEBOARD_reason",
+        "usedScene": {
+          "when": "always",
+          "abilities": [
+            "EntryAbility",
+            "SessionAbility"
+          ]
+        }
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING"
+      },
+      {
+        "name": "ohos.permission.INTERNET"
+      },
+      {
+        "name": "ohos.permission.GET_NETWORK_INFO"
+      }
+    ]
+  }
+}

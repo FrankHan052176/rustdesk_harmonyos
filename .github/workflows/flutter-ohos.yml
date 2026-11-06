@@ -1,0 +1,400 @@
+name: Build Flutter OpenHarmony
+
+on:
+  workflow_call:
+    inputs:
+      upload-artifact:
+        type: boolean
+        default: true
+      publish-release:
+        type: boolean
+        default: false
+      upload-agc:
+        type: boolean
+        default: false
+      upload-tag:
+        type: string
+        default: nightly
+      version:
+        type: string
+        default: 1.5.0
+    secrets:
+      OHOS_RELEASE_SIGNING_BASE64:
+        required: true
+      AGC_CLIENT_ID:
+        required: false
+      AGC_CLIENT_SECRET:
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  FLUTTER_OH_VERSION: 3.41.10-ohos-0.0.2-beta
+  FLUTTER_RUST_BRIDGE_VERSION: 1.80.1
+  OHOS_COMMAND_LINE_TOOLS_VERSION: 26.0.0.821
+  VERSION: ${{ inputs.version || '1.5.0' }}
+
+jobs:
+  build-rustdesk-ohos-flutter:
+    name: Flutter OpenHarmony (aarch64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install native build prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build pkg-config protobuf-compiler libsodium-dev
+
+      # scripts/clean-ohos-cargo-metadata.py and scripts/build-openssl-ohos.py parse Cargo.lock
+      # with tomllib, which only entered the standard library in Python 3.11; the ubuntu-22.04
+      # image still puts 3.10 on PATH as python3, so the build would fail to import it.
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Setup Java
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup HarmonyOS CLI tools
+        uses: ErBWs/setup-ohos@4dbb63025116eb6165ceac58a4bf47cbdc5ac721 # v2
+        with:
+          version: ${{ env.OHOS_COMMAND_LINE_TOOLS_VERSION }}
+          cache: true
+
+      # The controlled-side build requires HarmonyOS API 26, and publish signing requires Release.
+      # A command-line-tools version number
+      # alone does not establish its channel, so read the SDK actually installed above.
+      # setup-ohos exports HOS_SDK_HOME and reads the same
+      # $HOS_SDK_HOME/default/sdk-pkg.json for its own sdk-version/api-version outputs.
+      # FLUTTER_OH_VERSION also carries a -beta tag, but that names the Flutter-OH SDK, not this.
+      - name: Verify the HarmonyOS SDK API and channel
+        shell: bash
+        run: |
+          echo "command-line-tools: $OHOS_COMMAND_LINE_TOOLS_VERSION"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          sdk_home = os.environ.get("HOS_SDK_HOME", "").strip()
+          if not sdk_home:
+              sys.exit("HOS_SDK_HOME is unset, so the HarmonyOS SDK channel cannot be verified")
+
+          metadata_path = Path(sdk_home) / "default" / "sdk-pkg.json"
+          try:
+              metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+          except (OSError, ValueError) as error:
+              sys.exit(f"cannot read the HarmonyOS SDK metadata {metadata_path}: {error}")
+          data = metadata.get("data") if isinstance(metadata, dict) else None
+          if not isinstance(data, dict):
+              sys.exit(f"{metadata_path} has no data section")
+          fields = [data.get(key) for key in ("version", "apiVersion", "releaseType")]
+          if not all(isinstance(value, str) and value.strip() for value in fields):
+              sys.exit(f"{metadata_path} does not declare data.version, data.apiVersion and "
+                       "data.releaseType, so the SDK channel is unknown")
+          version, api_version, release_type = (value.strip() for value in fields)
+          print(f"HarmonyOS SDK: version={version} api={api_version} releaseType={release_type}")
+          if api_version != "26":
+              sys.exit(f"HarmonyOS SDK API {api_version} cannot build the required API 26 "
+                       "controlled-side client; an older Release SDK is not a substitute")
+          if release_type != "Release":
+              sys.exit(f"HarmonyOS SDK {version} is a {release_type} build; signing the publish App "
+                       "Pack needs the released toolchain, so pin OHOS_COMMAND_LINE_TOOLS_VERSION "
+                       "to a command-line-tools release build")
+
+          # Cross-check the components the signer links into the App against the same channel.
+          components = []
+          for root in (Path(sdk_home) / "default" / "openharmony", Path(sdk_home) / "openharmony"):
+              if not root.is_dir():
+                  continue
+              for descriptor in sorted(root.glob("*/oh-uni-package.json")):
+                  try:
+                      document = json.loads(descriptor.read_text(encoding="utf-8"))
+                  except (OSError, ValueError) as error:
+                      sys.exit(f"cannot read the SDK component metadata {descriptor}: {error}")
+                  components.append((descriptor.parent.name, document.get("version"),
+                                     document.get("apiVersion"), document.get("releaseType")))
+              if components:
+                  break
+          if not components:
+              sys.exit("the installed SDK has no OpenHarmony component metadata; "
+                       "component channels are unknown, so publish signing is blocked")
+          unreleased = []
+          for name, component_version, component_api, component_release_type in components:
+              print(f"component {name}: version={component_version or 'unknown'} "
+                    f"api={component_api or 'unknown'} releaseType={component_release_type or 'unknown'}")
+              if str(component_api) != "26":
+                  sys.exit(f"SDK component {name} declares API {component_api or 'unknown'}, expected 26")
+              if component_release_type != "Release":
+                  unreleased.append(f"{name}={component_release_type or 'unknown'}")
+          if unreleased:
+              sys.exit("HarmonyOS SDK components are not Release builds: " + ", ".join(unreleased))
+          PY
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-unknown-linux-ohos
+          components: ''
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          # Never restore native build outputs produced with a different HarmonyOS SDK.
+          prefix-key: flutter-ohos-port-linux-${{ env.OHOS_COMMAND_LINE_TOOLS_VERSION }}
+
+      # The SDK clone and its engine artifacts come from a Huawei-hosted CDN that has timed
+      # out three times on these runners in one day; reuse them across runs. The key carries
+      # the host OS and the run id: the cache is repository-wide, so a Linux run must never
+      # restore the darwin SDK a macOS run saved.
+      - name: Restore the Flutter-OH SDK
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/flutter-ohos
+          key: flutter-ohos-${{ runner.os }}-${{ env.FLUTTER_OH_VERSION }}-${{ github.run_id }}
+          restore-keys: |
+            flutter-ohos-${{ runner.os }}-${{ env.FLUTTER_OH_VERSION }}-
+
+      - name: Install Flutter-OH and bridge generator
+        shell: bash
+        run: |
+          if [[ ! -x "$RUNNER_TEMP/flutter-ohos/bin/flutter" ]]; then
+            git clone --depth 1 --branch "$FLUTTER_OH_VERSION" \
+              https://gitcode.com/CPF-Flutter/flutter_flutter.git "$RUNNER_TEMP/flutter-ohos"
+          fi
+          echo "$RUNNER_TEMP/flutter-ohos/bin" >> "$GITHUB_PATH"
+          # The Dart SDK and the engine artifacts come from a Huawei CDN whose DNS has failed
+          # outright on these runners; retry instead of losing the whole leg to one lookup.
+          for attempt in 1 2 3 4 5; do
+            if "$RUNNER_TEMP/flutter-ohos/bin/flutter" --version; then
+              break
+            fi
+            if [[ "$attempt" == 5 ]]; then
+              echo "Flutter-OH could not provision its SDK after $attempt attempts" >&2
+              exit 1
+            fi
+            sleep $((attempt * 20))
+          done
+          "$RUNNER_TEMP/flutter-ohos/bin/flutter" config --no-analytics
+          cargo install flutter_rust_bridge_codegen \
+            --version "$FLUTTER_RUST_BRIDGE_VERSION" \
+            --features uuid \
+            --locked
+
+      - name: Resolve Flutter dependencies
+        shell: bash
+        working-directory: flutter
+        run: |
+          python3 ../scripts/prepare-ohos-flutter.py
+          # pub get also pulls lazily-downloaded engine artifacts from the same Huawei CDN
+          # whose DNS has failed outright on these runners; retry instead of losing the leg.
+          for attempt in 1 2 3 4 5; do
+            if flutter pub get; then
+              break
+            fi
+            if [[ "$attempt" == 5 ]]; then
+              echo "Flutter-OH dependencies could not be resolved after $attempt attempts" >&2
+              exit 1
+            fi
+            sleep $((attempt * 20))
+          done
+
+      - name: Cross-compile OHOS Flutter bridge
+        shell: bash
+        env:
+          # scripts/build-openssl-ohos.py builds the locked OpenSSL out of tree under this root and
+          # reads the variable without a default. It names the NAS volume the workstation builds
+          # out of, whose exFAT cleanup breaks the vendored OpenSSL builder, so a runner needs a
+          # scratch root of its own instead: nothing there is shared with that machine.
+          RUSTDESK_BUILD_CACHE_ROOT: ${{ runner.temp }}/rustdesk-build-cache
+        run: |
+          bash scripts/build-ohos-ffi.sh
+
+      - name: Verify OHOS Flutter bridge
+        shell: bash
+        run: |
+          python3 scripts/ohos-port-core.py verify
+          packaged=flutter/ohos/entry/libs/arm64-v8a/liblibrustdesk.so
+          test -s "$packaged"
+          file "$packaged"
+
+      - name: Prepare OHOS release signing material
+        shell: bash
+        env:
+          OHOS_RELEASE_SIGNING_BASE64: ${{ secrets.OHOS_RELEASE_SIGNING_BASE64 }}
+          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
+        run: |
+          python3 .github/scripts/prepare-ohos-signing.py "$RUSTDESK_SIGNING_DIR"
+          echo "RUSTDESK_SIGNING_DIR=$RUSTDESK_SIGNING_DIR" >> "$GITHUB_ENV"
+
+      - name: Package signed Flutter OpenHarmony APP
+        shell: bash
+        env:
+          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
+          OHOS_PACKAGE_KIND: app
+          OHOS_BUILD_MODE: release
+          OHOS_PRODUCT: publish
+        run: |
+          for attempt in 1 2 3; do
+            rm -rf flutter/build/ohos
+            rm -rf flutter/ohos/build flutter/ohos/entry/build
+            if bash scripts/build-ohos-flutter-hap.sh; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then
+              echo "Packaging failed after $attempt attempts" >&2
+              exit 1
+            fi
+            sleep $((attempt * 30))
+          done
+
+      - name: Verify signed Flutter OpenHarmony APP
+        shell: bash
+        env:
+          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
+        run: |
+          app_list="$(find flutter/ohos/build -type f -name '*-signed.app' 2>/dev/null || true)"
+          app_count="$(printf '%s\n' "$app_list" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+          if [[ "$app_count" != 1 ]]; then
+            echo "Expected exactly one signed App, found $app_count." >&2
+            exit 1
+          fi
+          signed_app="$(printf '%s\n' "$app_list" | sed '/^$/d' | head -n 1)"
+          test -s "$signed_app"
+
+          signing_dir="$(cd "$RUSTDESK_SIGNING_DIR" && pwd)"
+          publish_profile="$signing_dir/RustDesk_UO_PublishRelease.p7b"
+          test -s "$publish_profile"
+
+          sign_tool=""
+          for sdk_home in "${HOS_SDK_HOME:-}" "${DEVECO_SDK_HOME:-}" "${OHOS_SDK_HOME:-}"; do
+            [[ -n "$sdk_home" ]] || continue
+            for candidate in \
+              "$sdk_home/default/openharmony/toolchains/lib/hap-sign-tool.jar" \
+              "$sdk_home/openharmony/toolchains/lib/hap-sign-tool.jar" \
+              "$sdk_home/toolchains/lib/hap-sign-tool.jar"; do
+              if [[ -r "$candidate" ]]; then
+                sign_tool="$candidate"
+                break 2
+              fi
+            done
+          done
+          if [[ -z "$sign_tool" ]]; then
+            echo "hap-sign-tool.jar was not found in the configured HarmonyOS SDK." >&2
+            exit 1
+          fi
+
+          python3 scripts/verify-ohos-release.py "$signed_app" \
+            --profile "$publish_profile" \
+            --sign-tool "$sign_tool"
+          OHOS_RELEASE_TEST_APP="$signed_app" \
+          OHOS_RELEASE_TEST_PROFILE="$publish_profile" \
+          OHOS_RELEASE_TEST_SIGN_TOOL="$sign_tool" \
+            python3 scripts/test_ohos_release.py
+
+          cp "$signed_app" "rustdesk-$VERSION-ohos-arm64.app"
+
+      - name: Stage the unsigned OpenHarmony HAP
+        shell: bash
+        run: |
+          unsigned_hap="$(find flutter/ohos -type f -name '*-unsigned.hap' 2>/dev/null | head -n 1)"
+          if [[ -z "$unsigned_hap" || ! -s "$unsigned_hap" ]]; then
+            echo "The packaging run produced no unsigned HAP." >&2
+            exit 1
+          fi
+          cp "$unsigned_hap" "rustdesk-$VERSION-ohos-arm64-unsigned.hap"
+
+      - name: Upload Flutter OpenHarmony HAP
+        if: ${{ inputs.upload-artifact }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rustdesk-flutter-ohos-hap
+          path: rustdesk-${{ env.VERSION }}-ohos-arm64-unsigned.hap
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      # Keep the verified publish-signed App Pack separate from the unsigned HAP.
+      - name: Upload the signed Flutter OpenHarmony APP
+        if: ${{ inputs.upload-artifact }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rustdesk-flutter-ohos-publish-app
+          path: rustdesk-${{ env.VERSION }}-ohos-arm64.app
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      # Uploads the verified signed App Pack and submits it as an AppGallery Connect test
+      # version (no production release, nothing goes to review).
+      - name: Upload the Flutter OpenHarmony APP and submit an AGC test version
+        if: ${{ inputs.upload-agc }}
+        shell: bash
+        env:
+          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
+          AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
+          # Override with the RustDesk AppGallery application configured for this repository.
+          AGC_APP_ID: ${{ vars.AGC_APP_ID || '6917615823381371195' }}
+          AGC_API_DOMAIN: ${{ vars.AGC_API_DOMAIN || 'connect-api.cloud.huawei.com' }}
+          # The open test window: starts an hour after submission and runs two months.
+          AGC_TEST_DURATION_DAYS: ${{ vars.AGC_TEST_DURATION_DAYS || '60' }}
+          # How long a single part of the App Pack may take: the upload is multipart, so this
+          # bounds one part rather than the whole file.
+          AGC_UPLOAD_MAX_TIME_SECONDS: ${{ vars.AGC_UPLOAD_MAX_TIME_SECONDS || '240' }}
+          AGC_EVENT_NAME: ${{ github.event_name }}
+          AGC_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AGC_WORKFLOW_SHA: ${{ github.sha }}
+          AGC_PUSH_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          bash .github/scripts/agc-test-release.sh "rustdesk-$VERSION-ohos-arm64.app"
+
+      # The release carries the unsigned HAP so a user can sign it themselves; the
+      # publish-signed App Pack travels as its own workflow artifact, and reaches
+      # AppGallery Connect whenever the submission above ran.
+      - name: Publish Flutter OpenHarmony HAP
+        if: ${{ inputs.publish-release }}
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          prerelease: true
+          tag_name: ${{ inputs.upload-tag }}
+          files: rustdesk-${{ env.VERSION }}-ohos-arm64-unsigned.hap
+
+      # Keep the SDK and the engine artifacts it downloaded for the next run; a cache hit
+      # skips the Huawei CDN entirely. Saving is best-effort, so a failure cannot fail the leg.
+      - name: Save the Flutter-OH SDK
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/flutter-ohos
+          key: flutter-ohos-${{ runner.os }}-${{ env.FLUTTER_OH_VERSION }}-${{ github.run_id }}
+
+      - name: Remove OHOS release signing material
+        if: always()
+        shell: bash
+        env:
+          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
+        run: |
+          case "$RUSTDESK_SIGNING_DIR" in
+            */rustdesk-ohos-signing) ;;
+            *)
+              echo "Unexpected signing directory: $RUSTDESK_SIGNING_DIR" >&2
+              exit 1
+              ;;
+          esac
+          rm -rf "$RUSTDESK_SIGNING_DIR"

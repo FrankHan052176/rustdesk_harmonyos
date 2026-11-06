@@ -107,7 +107,7 @@ class DesktopTabController {
   int get length => state.value.tabs.length;
 
   void add(TabInfo tab) {
-    if (!isDesktop) return;
+    if (!isDesktopUi) return;
     final index = state.value.tabs.indexWhere((e) => e.key == tab.key);
     int toIndex;
     if (index >= 0) {
@@ -130,7 +130,7 @@ class DesktopTabController {
   }
 
   void remove(int index) {
-    if (!isDesktop) return;
+    if (!isDesktopUi) return;
     final len = state.value.tabs.length;
     if (index < 0 || index > len - 1) return;
     final key = state.value.tabs[index].key;
@@ -150,7 +150,7 @@ class DesktopTabController {
   /// For addTab, tabPage has not been initialized, set [callOnSelected] to false,
   /// and call [onSelected] at the end of initState
   bool jumpTo(int index, {bool callOnSelected = true}) {
-    if (!isDesktop || index < 0) {
+    if (!isDesktopUi || index < 0) {
       return false;
     }
     state.update((val) {
@@ -169,7 +169,7 @@ class DesktopTabController {
         }));
       }
     });
-    if ((isDesktop && (bind.isIncomingOnly() || bind.isOutgoingOnly())) ||
+    if ((isDesktopUi && (bind.isIncomingOnly() || bind.isOutgoingOnly())) ||
         callOnSelected) {
       if (state.value.tabs.length > index) {
         final key = state.value.tabs[index].key;
@@ -199,7 +199,7 @@ class DesktopTabController {
   }
 
   void closeBy(String? key) {
-    if (!isDesktop) return;
+    if (!isDesktopUi) return;
     assert(onRemoved != null);
     if (key == null) {
       if (state.value.selected < state.value.tabs.length) {
@@ -336,10 +336,20 @@ class _DesktopTabState extends State<DesktopTab>
   @override
   void initState() {
     super.initState();
-    DesktopMultiWindow.addListener(this);
-    windowManager.addListener(this);
+    if (!isOhos) {
+      DesktopMultiWindow.addListener(this);
+      windowManager.addListener(this);
+    }
 
     Future.delayed(Duration(milliseconds: 500), () {
+      if (isOhos) {
+        platformFFI.isWindowMaximized().then((maximized) {
+          if (mounted && stateGlobal.isMaximized.value != maximized) {
+            setState(() => stateGlobal.setMaximized(maximized));
+          }
+        });
+        return;
+      }
       if (isMainWindow) {
         windowManager.isMaximized().then((maximized) {
           if (stateGlobal.isMaximized.value != maximized) {
@@ -362,8 +372,10 @@ class _DesktopTabState extends State<DesktopTab>
 
   @override
   void dispose() {
-    DesktopMultiWindow.removeListener(this);
-    windowManager.removeListener(this);
+    if (!isOhos) {
+      DesktopMultiWindow.removeListener(this);
+      windowManager.removeListener(this);
+    }
     _macOSCheckRestoreTimer?.cancel();
     super.dispose();
   }
@@ -784,7 +796,9 @@ class WindowActionPanelState extends State<WindowActionPanel> {
                   message: 'Minimize',
                   icon: IconFont.min,
                   onTap: () {
-                    if (widget.isMainWindow) {
+                    if (isOhos) {
+                      platformFFI.minimizeWindow();
+                    } else if (widget.isMainWindow) {
                       windowManager.minimize();
                     } else {
                       WindowController.fromWindowId(kWindowId!).minimize();
@@ -815,7 +829,9 @@ class WindowActionPanelState extends State<WindowActionPanel> {
                       // hide for all window
                       // note: the main window can be restored by tray icon
                       Future.delayed(Duration.zero, () async {
-                        if (widget.isMainWindow) {
+                        if (isOhos) {
+                          await platformFFI.closeWindow();
+                        } else if (widget.isMainWindow) {
                           await windowManager.close();
                         } else {
                           await WindowController.fromWindowId(kWindowId!)
@@ -841,7 +857,9 @@ class WindowActionPanelState extends State<WindowActionPanel> {
 }
 
 void startDragging(bool isMainWindow) {
-  if (isMainWindow) {
+  if (isOhos) {
+    platformFFI.startMovingWindow();
+  } else if (isMainWindow) {
     windowManager.startDragging();
   } else {
     WindowController.fromWindowId(kWindowId!).startDragging();
@@ -859,7 +877,9 @@ void setMovable(bool isMainWindow, bool movable) {
 /// return true -> window will be maximize
 /// return false -> window will be unmaximize
 Future<bool> toggleMaximize(bool isMainWindow) async {
-  if (isMainWindow) {
+  if (isOhos) {
+    return await platformFFI.toggleMaximizeWindow();
+  } else if (isMainWindow) {
     if (await windowManager.isMaximized()) {
       windowManager.unmaximize();
       return false;

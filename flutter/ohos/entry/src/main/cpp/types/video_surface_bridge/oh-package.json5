@@ -1,0 +1,6 @@
+{
+  "name": "libvideo_surface_bridge.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "RustDesk Flutter texture surface bridge over liblibrustdesk.so."
+}

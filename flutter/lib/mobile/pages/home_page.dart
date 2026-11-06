@@ -52,7 +52,9 @@ class HomePageState extends State<HomePage> {
         appBarActions: [],
       ));
     }
-    if (isAndroid && !bind.isOutgoingOnly()) {
+    if (isOhos && !bind.isOutgoingOnly()) {
+      _pages.add(ServerPage());
+    } else if (isAndroid && !bind.isOutgoingOnly()) {
       _chatPageTabIndex = _pages.length;
       _pages.addAll([ChatPage(type: ChatPageType.mobileMain), ServerPage()]);
     }
