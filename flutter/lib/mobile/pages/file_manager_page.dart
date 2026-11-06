@@ -2,15 +2,19 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_breadcrumb/flutter_breadcrumb.dart';
 import 'package:flutter_hbb/models/file_model.dart';
+import 'package:flutter_hbb/models/model.dart';
 import 'package:get/get.dart';
 import 'package:toggle_switch/toggle_switch.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
 import '../../consts.dart';
 import '../../utils/android_documents.dart';
+import '../../utils/ohos_session_window.dart';
 
 class FileManagerPage extends StatefulWidget {
   FileManagerPage(
@@ -65,7 +69,8 @@ extension SelectModeExt on Rx<SelectMode> {
 }
 
 class _FileManagerPageState extends State<FileManagerPage> {
-  final model = gFFI.fileModel;
+  late final FFI _ffi;
+  FileModel get model => _ffi.fileModel;
   final selectMode = SelectMode.none.obs;
 
   var showLocal = true;
@@ -274,277 +279,336 @@ class _FileManagerPageState extends State<FileManagerPage> {
   @override
   void initState() {
     super.initState();
-    gFFI.start(widget.id,
+    _ffi = isOhosDesktop ? FFI(Uuid().v4obj()) : gFFI;
+    _ffi.start(widget.id,
         isFileTransfer: true,
         password: widget.password,
         isSharedPassword: widget.isSharedPassword,
         forceRelay: widget.forceRelay);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      gFFI.dialogManager
-          .showLoading(translate('Connecting...'), onCancel: closeConnection);
+      if (mounted && !_ffi.closed && !_ffi.ffiModel.pi.isSet.value) {
+        _ffi.dialogManager
+            .showLoading(translate('Connecting...'), onCancel: closeConnection);
+      }
     });
-    gFFI.ffiModel.updateEventListener(gFFI.sessionId, widget.id);
+    _ffi.ffiModel.updateEventListener(_ffi.sessionId, widget.id);
     WakelockManager.enable(_uniqueKey);
   }
 
   @override
   void dispose() {
-    model.close().whenComplete(() {
-      gFFI.close();
-      gFFI.dialogManager.dismissAll();
-      WakelockManager.disable(_uniqueKey);
-    });
+    final closingModel = model.close();
+    final closingSession = _ffi.close();
+    _ffi.dialogManager.dismissAll();
+    WakelockManager.disable(_uniqueKey);
+    final closing = Future.wait([closingModel, closingSession]);
+    OhosSessionWindow.trackDisposal(closing.then<void>((_) {}));
+    unawaited(closing.catchError((Object e, StackTrace stack) {
+      debugPrint('Failed to close file transfer: $e\n$stack');
+      return <void>[];
+    }));
     model.jobController.clear();
     super.dispose();
   }
 
+  void _requestClose() {
+    if (_ffi.ffiModel.pi.isSet.value) {
+      clientClose(_ffi.sessionId, _ffi);
+    } else {
+      closeConnection();
+    }
+  }
+
   @override
-  Widget build(BuildContext context) => WillPopScope(
-      onWillPop: () async {
-        if (selectMode.value != SelectMode.none) {
-          selectMode.value = SelectMode.none;
-          setState(() {});
-        } else {
-          currentFileController.goBack();
-        }
-        return false;
-      },
-      child: Scaffold(
-        // backgroundColor: MyTheme.grayBg,
-        appBar: AppBar(
-          leading: Row(children: [
-            IconButton(
-                icon: Icon(Icons.close),
-                onPressed: () => clientClose(gFFI.sessionId, gFFI)),
-          ]),
-          centerTitle: true,
-          title: ToggleSwitch(
-            initialLabelIndex: showLocal ? 0 : 1,
-            activeBgColor: [MyTheme.idColor],
-            inactiveBgColor: Theme.of(context).brightness == Brightness.light
-                ? MyTheme.grayBg
-                : null,
-            inactiveFgColor: Theme.of(context).brightness == Brightness.light
-                ? Colors.black54
-                : null,
-            totalSwitches: 2,
-            minWidth: 100,
-            fontSize: 15,
-            iconSize: 18,
-            labels: [translate("Local"), translate("Remote")],
-            icons: [Icons.phone_android_sharp, Icons.screen_share],
-            onToggle: (index) {
-              final current = showLocal ? 0 : 1;
-              if (index != current) {
-                setState(() => showLocal = !showLocal);
-              }
-            },
-          ),
-          actions: [
-            PopupMenuButton<String>(
-                tooltip: "",
-                icon: Icon(Icons.more_vert),
-                itemBuilder: (context) {
-                  return [
-                    if (isAndroid && showLocal) ...[
-                      PopupMenuItem(
-                        value: 'workspace',
-                        child: Row(
-                          children: [
-                            Icon(Icons.storage_outlined,
-                                color: Theme.of(context).iconTheme.color),
-                            SizedBox(width: 5),
-                            Text(translate('RustDesk storage')),
-                          ],
-                        ),
+  Widget build(BuildContext context) => CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.escape): _requestClose,
+        },
+        child: Focus(
+            autofocus: true,
+            child: WillPopScope(
+              onWillPop: () async {
+                if (!_ffi.ffiModel.pi.isSet.value) return true;
+                if (isOhosDesktop) {
+                  _requestClose();
+                  return false;
+                }
+                if (selectMode.value != SelectMode.none) {
+                  selectMode.value = SelectMode.none;
+                  setState(() {});
+                } else {
+                  currentFileController.goBack();
+                }
+                return false;
+              },
+              child: Obx(() {
+                if (!_ffi.ffiModel.pi.isSet.value) {
+                  return Scaffold(
+                    appBar: AppBar(
+                      leading: IconButton(
+                        tooltip: translate('Close'),
+                        icon: const Icon(Icons.close),
+                        onPressed: _requestClose,
                       ),
-                      PopupMenuItem(
-                        value: 'choose_folder',
-                        child: Row(
-                          children: [
-                            Icon(Icons.folder_open_outlined,
-                                color: Theme.of(context).iconTheme.color),
-                            SizedBox(width: 5),
-                            Text('${translate('Other folders')}…'),
-                          ],
-                        ),
-                      ),
-                      const PopupMenuDivider(),
-                    ],
-                    PopupMenuItem(
-                      child: Row(
-                        children: [
-                          Icon(Icons.refresh,
-                              color: Theme.of(context).iconTheme.color),
-                          SizedBox(width: 5),
-                          Text(translate("Refresh File"))
-                        ],
-                      ),
-                      value: "refresh",
+                      title: Text(translate('File Transfer')),
                     ),
-                    if (isAndroid && !AndroidDocuments.isPath(currentDir.path))
-                      PopupMenuItem(
-                        enabled: showLocal && currentDir.path.isNotEmpty,
-                        value: "import",
-                        child: Row(
-                          children: [
-                            Icon(Icons.add_to_drive,
-                                color: Theme.of(context).iconTheme.color),
-                            SizedBox(width: 5),
-                            Text(translate("Add"))
-                          ],
-                        ),
-                      ),
-                    if (isAndroid && !AndroidDocuments.isPath(currentDir.path))
-                      PopupMenuItem(
-                        enabled: showLocal && currentDir.path.isNotEmpty,
-                        value: "import_folder",
-                        child: Row(
-                          children: [
-                            Icon(Icons.create_new_folder_outlined,
-                                color: Theme.of(context).iconTheme.color),
-                            SizedBox(width: 5),
-                            Text(translate("Import Folder"))
-                          ],
-                        ),
-                      ),
-                    if (isAndroid)
-                      PopupMenuItem(
-                        enabled: showLocal && currentDir.path.isNotEmpty,
-                        value: "export_logs",
-                        child: Row(
-                          children: [
-                            Icon(Icons.article_outlined,
-                                color: Theme.of(context).iconTheme.color),
-                            SizedBox(width: 5),
-                            Text(translate("Export Logs"))
-                          ],
-                        ),
-                      ),
-                    PopupMenuItem(
-                      enabled: currentDir.path != "/",
-                      child: Row(
-                        children: [
-                          Icon(Icons.check,
-                              color: Theme.of(context).iconTheme.color),
-                          SizedBox(width: 5),
-                          Text(translate("Multi Select"))
-                        ],
-                      ),
-                      value: "select",
-                    ),
-                    PopupMenuItem(
-                      enabled: currentDir.path != "/",
-                      child: Row(
-                        children: [
-                          Icon(Icons.folder_outlined,
-                              color: Theme.of(context).iconTheme.color),
-                          SizedBox(width: 5),
-                          Text(translate("Create Folder"))
-                        ],
-                      ),
-                      value: "folder",
-                    ),
-                    PopupMenuItem(
-                      enabled: currentDir.path != "/",
-                      child: Row(
-                        children: [
-                          Icon(
-                              currentOptions.showHidden
-                                  ? Icons.check_box_outlined
-                                  : Icons.check_box_outline_blank,
-                              color: Theme.of(context).iconTheme.color),
-                          SizedBox(width: 5),
-                          Text(translate("Show Hidden Files"))
-                        ],
-                      ),
-                      value: "hidden",
-                    )
-                  ];
-                },
-                onSelected: (v) {
-                  if (v == 'workspace' || v == 'choose_folder') {
-                    _changeLocalStorage(workspace: v == 'workspace');
-                  } else if (v == "refresh") {
-                    currentFileController.refresh();
-                  } else if (v == "import") {
-                    _importFiles();
-                  } else if (v == "import_folder") {
-                    _importFolder();
-                  } else if (v == "export_logs") {
-                    _exportLogs();
-                  } else if (v == "select") {
-                    model.localController.selectedItems.clear();
-                    model.remoteController.selectedItems.clear();
-                    selectMode.toggle(showLocal);
-                    setState(() {});
-                  } else if (v == "folder") {
-                    final name = TextEditingController();
-                    String? errorText;
-                    gFFI.dialogManager.show((setState, close, context) {
-                      name.addListener(() {
-                        if (errorText != null) {
-                          setState(() {
-                            errorText = null;
-                          });
+                  );
+                }
+                return Scaffold(
+                  // backgroundColor: MyTheme.grayBg,
+                  appBar: AppBar(
+                    leading: Row(children: [
+                      IconButton(
+                          icon: Icon(Icons.close),
+                          tooltip: translate('Close'),
+                          onPressed: _requestClose),
+                    ]),
+                    centerTitle: true,
+                    title: ToggleSwitch(
+                      initialLabelIndex: showLocal ? 0 : 1,
+                      activeBgColor: [MyTheme.idColor],
+                      inactiveBgColor:
+                          Theme.of(context).brightness == Brightness.light
+                              ? MyTheme.grayBg
+                              : null,
+                      inactiveFgColor:
+                          Theme.of(context).brightness == Brightness.light
+                              ? Colors.black54
+                              : null,
+                      totalSwitches: 2,
+                      minWidth: 100,
+                      fontSize: 15,
+                      iconSize: 18,
+                      labels: [translate("Local"), translate("Remote")],
+                      icons: [Icons.phone_android_sharp, Icons.screen_share],
+                      onToggle: (index) {
+                        final current = showLocal ? 0 : 1;
+                        if (index != current) {
+                          setState(() => showLocal = !showLocal);
                         }
-                      });
-                      return CustomAlertDialog(
-                          title: Text(translate("Create Folder")),
-                          content: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              TextFormField(
-                                decoration: InputDecoration(
-                                  labelText:
-                                      translate("Please enter the folder name"),
-                                  errorText: errorText,
+                      },
+                    ),
+                    actions: [
+                      PopupMenuButton<String>(
+                          tooltip: "",
+                          icon: Icon(Icons.more_vert),
+                          itemBuilder: (context) {
+                            return [
+                              if (isAndroid && showLocal) ...[
+                                PopupMenuItem(
+                                  value: 'workspace',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.storage_outlined,
+                                          color: Theme.of(context).iconTheme.color),
+                                      SizedBox(width: 5),
+                                      Text(translate('RustDesk storage')),
+                                    ],
+                                  ),
                                 ),
-                                controller: name,
-                              ).workaroundFreezeLinuxMint(),
-                            ],
-                          ),
-                          actions: [
-                            dialogButton("Cancel",
-                                onPressed: () => close(false), isOutline: true),
-                            dialogButton("OK", onPressed: () {
-                              if (name.value.text.isNotEmpty) {
-                                if (!PathUtil.validName(
-                                    name.value.text,
-                                    currentFileController
-                                        .options.value.isWindows)) {
-                                  setState(() {
-                                    errorText =
-                                        translate("Invalid folder name");
-                                  });
-                                  return;
-                                }
-                                currentFileController.createDir(PathUtil.join(
-                                    currentDir.path,
-                                    name.value.text,
-                                    currentOptions.isWindows));
-                                close();
-                              }
-                            })
-                          ]);
-                    });
-                  } else if (v == "hidden") {
-                    currentFileController.toggleShowHidden();
-                  }
-                }),
-          ],
-        ),
-        body: showLocal
-            ? FileManagerView(
-                controller: model.localController,
-                selectMode: selectMode,
-              )
-            : FileManagerView(
-                controller: model.remoteController,
-                selectMode: selectMode,
-              ),
-        bottomSheet: bottomSheet(),
-      ));
+                                PopupMenuItem(
+                                  value: 'choose_folder',
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.folder_open_outlined,
+                                          color: Theme.of(context).iconTheme.color),
+                                      SizedBox(width: 5),
+                                      Text('${translate('Other folders')}…'),
+                                    ],
+                                  ),
+                                ),
+                                const PopupMenuDivider(),
+                              ],
+                              PopupMenuItem(
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.refresh,
+                                        color:
+                                            Theme.of(context).iconTheme.color),
+                                    SizedBox(width: 5),
+                                    Text(translate("Refresh File"))
+                                  ],
+                                ),
+                                value: "refresh",
+                              ),
+                              if (isAndroid && !AndroidDocuments.isPath(currentDir.path))
+                                PopupMenuItem(
+                                  enabled: showLocal &&
+                                      currentDir.path.isNotEmpty,
+                                  value: "import",
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.add_to_drive,
+                                          color:
+                                              Theme.of(context).iconTheme.color),
+                                      SizedBox(width: 5),
+                                      Text(translate("Add"))
+                                    ],
+                                  ),
+                                ),
+                              if (isAndroid && !AndroidDocuments.isPath(currentDir.path))
+                                PopupMenuItem(
+                                  enabled: showLocal &&
+                                      currentDir.path.isNotEmpty,
+                                  value: "import_folder",
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.create_new_folder_outlined,
+                                          color:
+                                              Theme.of(context).iconTheme.color),
+                                      SizedBox(width: 5),
+                                      Text(translate("Import Folder"))
+                                    ],
+                                  ),
+                                ),
+                              if (isAndroid)
+                                PopupMenuItem(
+                                  enabled: showLocal &&
+                                      currentDir.path.isNotEmpty,
+                                  value: "export_logs",
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.article_outlined,
+                                          color:
+                                              Theme.of(context).iconTheme.color),
+                                      SizedBox(width: 5),
+                                      Text(translate("Export Logs"))
+                                    ],
+                                  ),
+                                ),
+                              PopupMenuItem(
+                                enabled: currentDir.path != "/",
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.check,
+                                        color:
+                                            Theme.of(context).iconTheme.color),
+                                    SizedBox(width: 5),
+                                    Text(translate("Multi Select"))
+                                  ],
+                                ),
+                                value: "select",
+                              ),
+                              PopupMenuItem(
+                                enabled: currentDir.path != "/",
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.folder_outlined,
+                                        color:
+                                            Theme.of(context).iconTheme.color),
+                                    SizedBox(width: 5),
+                                    Text(translate("Create Folder"))
+                                  ],
+                                ),
+                                value: "folder",
+                              ),
+                              PopupMenuItem(
+                                enabled: currentDir.path != "/",
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                        currentOptions.showHidden
+                                            ? Icons.check_box_outlined
+                                            : Icons.check_box_outline_blank,
+                                        color:
+                                            Theme.of(context).iconTheme.color),
+                                    SizedBox(width: 5),
+                                    Text(translate("Show Hidden Files"))
+                                  ],
+                                ),
+                                value: "hidden",
+                              )
+                            ];
+                          },
+                          onSelected: (v) {
+                            if (v == 'workspace' || v == 'choose_folder') {
+                              _changeLocalStorage(workspace: v == 'workspace');
+                            } else if (v == "refresh") {
+                              currentFileController.refresh();
+                            } else if (v == "import") {
+                              _importFiles();
+                            } else if (v == "import_folder") {
+                              _importFolder();
+                            } else if (v == "export_logs") {
+                              _exportLogs();
+                            } else if (v == "select") {
+                              model.localController.selectedItems.clear();
+                              model.remoteController.selectedItems.clear();
+                              selectMode.toggle(showLocal);
+                              setState(() {});
+                            } else if (v == "folder") {
+                              final name = TextEditingController();
+                              String? errorText;
+                              _ffi.dialogManager
+                                  .show((setState, close, context) {
+                                name.addListener(() {
+                                  if (errorText != null) {
+                                    setState(() {
+                                      errorText = null;
+                                    });
+                                  }
+                                });
+                                return CustomAlertDialog(
+                                    title: Text(translate("Create Folder")),
+                                    content: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        TextFormField(
+                                          decoration: InputDecoration(
+                                            labelText: translate(
+                                                "Please enter the folder name"),
+                                            errorText: errorText,
+                                          ),
+                                          controller: name,
+                                        ).workaroundFreezeLinuxMint(),
+                                      ],
+                                    ),
+                                    actions: [
+                                      dialogButton("Cancel",
+                                          onPressed: () => close(false),
+                                          isOutline: true),
+                                      dialogButton("OK", onPressed: () {
+                                        if (name.value.text.isNotEmpty) {
+                                          if (!PathUtil.validName(
+                                              name.value.text,
+                                              currentFileController
+                                                  .options.value.isWindows)) {
+                                            setState(() {
+                                              errorText = translate(
+                                                  "Invalid folder name");
+                                            });
+                                            return;
+                                          }
+                                          currentFileController.createDir(
+                                              PathUtil.join(
+                                                  currentDir.path,
+                                                  name.value.text,
+                                                  currentOptions.isWindows));
+                                          close();
+                                        }
+                                      })
+                                    ]);
+                              });
+                            } else if (v == "hidden") {
+                              currentFileController.toggleShowHidden();
+                            }
+                          }),
+                    ],
+                  ),
+                  body: showLocal
+                      ? FileManagerView(
+                          controller: model.localController,
+                          selectMode: selectMode,
+                        )
+                      : FileManagerView(
+                          controller: model.remoteController,
+                          selectMode: selectMode,
+                        ),
+                  bottomSheet: bottomSheet(),
+                );
+              }),
+            )),
+      );
 
   Widget? bottomSheet() {
     return Obx(() {
@@ -818,7 +882,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                                   enabled: false,
                                 ),
                                 if (!entries[index].isDrive &&
-                                    versionCmp(gFFI.ffiModel.pi.version,
+                                    versionCmp(
+                                            controller.rootState.target
+                                                    ?.ffiModel.pi.version ??
+                                                '',
                                             "1.3.0") >=
                                         0)
                                   PopupMenuItem(

@@ -25,9 +25,11 @@ import 'package:flutter_hbb/models/shortcut_model.dart';
 import 'package:flutter_hbb/models/user_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/models/desktop_render_texture.dart';
+import 'package:flutter_hbb/models/ohos_video_texture.dart';
 import 'package:flutter_hbb/models/terminal_model.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
+import 'package:flutter_hbb/utils/ohos_session_window.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
 import 'package:tuple/tuple.dart';
 import 'package:image/image.dart' as img2;
@@ -449,6 +451,8 @@ class FfiModel with ChangeNotifier {
         handleFollowCurrentDisplay(evt, sessionId, peerId);
       } else if (name == 'use_texture_render') {
         _handleUseTextureRender(evt, sessionId, peerId);
+      } else if (name == 'ohos_video_output') {
+        await parent.target?.ohosVideoTexture.handleOutputEvent(evt);
       } else if (name == "selected_files") {
         if (isWeb) {
           parent.target?.fileModel.onSelectedFiles(evt);
@@ -502,12 +506,27 @@ class FfiModel with ChangeNotifier {
         close();
         Future.delayed(Duration.zero, () async {
           final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-          String? outputFile = await FilePicker.platform.saveFile(
-            dialogTitle: '${translate('Save as')}...',
-            fileName: 'screenshot_$ts.png',
-            allowedExtensions: ['png'],
-            type: FileType.custom,
-          );
+          String? outputFile;
+          if (isOhosDesktop) {
+            // HarmonyOS registers no file picker plugin; the granted Download directory is
+            // the same destination the file manager downloads into.
+            try {
+              final directory = await platformFFI.getOhosDownloadDirectory();
+              outputFile = '$directory/screenshot_$ts.png';
+            } catch (error) {
+              msgBox(sessionId, 'custom-nook-nocancel-hasclose-error',
+                  'Take screenshot', '$error', '', dialogManager);
+              bind.sessionHandleScreenshot(sessionId: sessionId, action: '2');
+              return;
+            }
+          } else {
+            outputFile = await FilePicker.platform.saveFile(
+              dialogTitle: '${translate('Save as')}...',
+              fileName: 'screenshot_$ts.png',
+              allowedExtensions: ['png'],
+              type: FileType.custom,
+            );
+          }
           if (outputFile == null) {
             bind.sessionHandleScreenshot(sessionId: sessionId, action: '2');
           } else {
@@ -1376,9 +1395,10 @@ class FfiModel with ChangeNotifier {
       _pi.primaryDisplay = currentDisplay;
     }
 
-    if (bind.peerGetSessionsCount(
-            id: peerId, connType: parent.target!.connType.index) <=
-        1) {
+    if ((isOhos && !_pi.isSet.value) ||
+        bind.peerGetSessionsCount(
+                id: peerId, connType: parent.target!.connType.index) <=
+            1) {
       _pi.currentDisplay = currentDisplay;
     }
 
@@ -1480,6 +1500,11 @@ class FfiModel with ChangeNotifier {
         } catch (e) {
           debugPrint('Failed to decode platformAdditions $e');
         }
+      }
+      if (isOhos && !isCache) {
+        // Match the ArkTS client: re-apply the persisted codec preference after authentication
+        // so the active Windows stream renegotiates instead of remaining on its initial Auto codec.
+        await bind.sessionChangePreferCodec(sessionId: sessionId);
       }
     }
 
@@ -1982,7 +2007,10 @@ class ImageModel with ChangeNotifier {
       rgba,
       rect?.width.toInt() ?? 0,
       rect?.height.toInt() ?? 0,
-      isWeb | isWindows | isLinux
+      // OHOS's video handler decodes into ImageFormat::ABGR, which is RGBA in
+      // memory like the desktop and web buffers; Android, iOS and macOS
+      // produce BGRA.
+      isWeb | isWindows | isLinux | isOhos
           ? ui.PixelFormat.rgba8888
           : ui.PixelFormat.bgra8888,
     );
@@ -2020,20 +2048,34 @@ class ImageModel with ChangeNotifier {
   }
 
   // mobile only
+  Size? get videoSize {
+    final ffi = parent.target;
+    if (isOhos && ffi != null &&
+        ffi.ohosVideoTexture.isSurfaceOutput(ffi.ffiModel.pi.currentDisplay)) {
+      return ffi.ffiModel.rect?.size;
+    }
+    return _image == null ? null : Size(_image!.width.toDouble(), _image!.height.toDouble());
+  }
+
+  bool get hasVideo => videoSize != null;
+
+  // mobile only
   double get maxScale {
-    if (_image == null) return 1.5;
+    final video = videoSize;
+    if (video == null) return 1.5;
     final size = parent.target!.canvasModel.getSize();
-    final xscale = size.width / _image!.width;
-    final yscale = size.height / _image!.height;
+    final xscale = size.width / video.width;
+    final yscale = size.height / video.height;
     return max(1.5, max(xscale, yscale));
   }
 
   // mobile only
   double get minScale {
-    if (_image == null) return 1.5;
+    final video = videoSize;
+    if (video == null) return 1.5;
     final size = parent.target!.canvasModel.getSize();
-    final xscale = size.width / _image!.width;
-    final yscale = size.height / _image!.height;
+    final xscale = size.width / video.width;
+    final yscale = size.height / video.height;
     return min(xscale, yscale) / 1.5;
   }
 
@@ -2734,7 +2776,7 @@ class CanvasModel with ChangeNotifier {
 
   // mobile only
   updateScale(double v, Offset focalPoint) {
-    if (parent.target?.imageModel.image == null) return;
+    if (parent.target?.imageModel.hasVideo != true) return;
     final s = _scale;
     _scale *= v;
     final maxs = parent.target?.imageModel.maxScale ?? 1;
@@ -3365,7 +3407,7 @@ class CursorModel with ChangeNotifier {
     }
     double dx = delta.dx;
     double dy = delta.dy;
-    if (parent.target?.imageModel.image == null) return;
+    if (parent.target?.imageModel.hasVideo != true) return;
     final scale = parent.target?.canvasModel.scale ?? 1.0;
     dx /= scale;
     dy /= scale;
@@ -4032,6 +4074,7 @@ class FFI {
   var version = '';
   var connType = ConnType.defaultConn;
   var closed = false;
+  Future<void>? _closeFuture;
 
   /// dialogManager use late to ensure init after main page binding [globalKey]
   late final dialogManager = OverlayDialogManager();
@@ -4054,6 +4097,14 @@ class FFI {
   late final ElevationModel elevationModel; // session
   late final CmFileModel cmFileModel; // cm
   late final TextureModel textureModel; //session
+  late final ohosVideoTexture = OhosVideoTextureModel(
+    sessionId: sessionId.toString(),
+    onSurfaceFrame: () async {
+      final first = ffiModel.waitForFirstImage.value;
+      await onEvent2UIRgba();
+      if (first && !closed) await initializeCursorAndCanvas(this);
+    },
+  );
   late final ShortcutModel shortcutModel; // session
   late final Peers recentPeersModel; // global
   late final Peers favoritePeersModel; // global
@@ -4066,7 +4117,10 @@ class FFI {
   Map<int, TerminalModel> get terminalModels => _terminalModels;
 
   FFI(SessionID? sId) {
-    sessionId = sId ?? (isDesktop ? Uuid().v4obj() : _constSessionId);
+    sessionId = sId ??
+        ((isDesktop || OhosSessionWindow.isSession)
+            ? Uuid().v4obj()
+            : _constSessionId);
     imageModel = ImageModel(WeakReference(this));
     ffiModel = FfiModel(WeakReference(this));
     cursorModel = CursorModel(WeakReference(this));
@@ -4099,6 +4153,7 @@ class FFI {
 
   /// Mobile reuse FFI
   void mobileReset() {
+    if (isOhos) ohosVideoTexture.reset();
     ffiModel.resetRestartReconnectState();
     ffiModel.waitForFirstImage.value = true;
     ffiModel.isRefreshing = false;
@@ -4123,7 +4178,10 @@ class FFI {
     int? tabWindowId,
     int? display,
     List<int>? displays,
-  }) {
+  }) async {
+    if (isOhos && _closeFuture != null) await _closeFuture;
+    _closeFuture = null;
+    OhosSessionWindow.registerSession(sessionId.toString(), () => close());
     closed = false;
     if (isMobile) mobileReset();
     assert(
@@ -4167,7 +4225,7 @@ class FFI {
         forceRelay: forceRelay ?? false,
         password: password ?? '',
         isSharedPassword: isSharedPassword ?? false,
-        connToken: connToken,
+        connToken: connToken ?? OhosSessionWindow.connectionToken,
       );
     } else if (display != null) {
       if (displays == null) {
@@ -4372,8 +4430,26 @@ class FFI {
   }
 
   /// Close the remote session.
-  Future<void> close({bool closeSession = true}) async {
+  Future<void> close({bool closeSession = true}) {
+    if (isOhos || OhosSessionWindow.isSession) {
+      return _closeFuture ??= _close(closeSession: closeSession);
+    }
+    return _close(closeSession: closeSession);
+  }
+
+  Future<void> waitForClose() => _closeFuture ?? Future<void>.value();
+
+  Future<void> _closeNativeSession() async {
+    if (isOhos) await ohosVideoTexture.close();
+    await bind.sessionClose(sessionId: sessionId);
+  }
+
+  Future<void> _close({required bool closeSession}) async {
     closed = true;
+    final saveCanvas = imageModel.hasVideo && !isWebDesktop;
+    // Start native teardown before UI cleanup awaits. Startup joins this
+    // close future, so a late close cannot remove the next mobile session.
+    final nativeClosed = closeSession ? _closeNativeSession() : Future<void>.value();
     if (isWeb) {
       platformFFI.clearVideoFrameCallback();
     }
@@ -4383,7 +4459,7 @@ class FFI {
       model.dispose();
     }
     _terminalModels.clear();
-    if (imageModel.image != null && !isWebDesktop) {
+    if (saveCanvas) {
       await setCanvasConfig(
           sessionId,
           cursorModel.x,
@@ -4403,8 +4479,12 @@ class FFI {
     // Dispose relative mouse mode resources to ensure cursor is restored
     inputModel.disposeRelativeMouseMode();
     inputModel.disposeSideButtonTracking();
-    if (closeSession) {
-      await bind.sessionClose(sessionId: sessionId);
+    await nativeClosed;
+    if (OhosSessionWindow.isSession) {
+      // The pushed session route never pops itself, so a closed session must take its
+      // HarmonyOS window with it instead of leaving a black rectangle behind. The session
+      // teardown is already running here, hence the terminate-only call.
+      await platformFFI.terminateWindow();
     }
     debugPrint('model $id closed');
     id = '';
@@ -4537,7 +4617,7 @@ class PeerInfo with ChangeNotifier {
 
   bool get isSupportMultiDisplay =>
       (isDesktop || isWebDesktop) && isSupportMultiUiSession;
-  bool get forceTextureRender => currentDisplay == kAllDisplayValue;
+  bool get forceTextureRender => !isOhos && currentDisplay == kAllDisplayValue;
 
   bool get cursorEmbedded => tryGetDisplay()?.cursorEmbedded ?? false;
 

@@ -17,12 +17,14 @@ import 'package:provider/provider.dart';
 import '../../common.dart';
 import '../../common/widgets/overlay.dart';
 import '../../common/widgets/dialog.dart';
+import '../../common/widgets/ohos_video_texture.dart';
 import '../../common/widgets/remote_input.dart';
 import '../../models/input_model.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
 import '../../utils/image.dart';
+import '../../utils/ohos_session_window.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
 
@@ -182,35 +184,40 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   @override
-  Future<void> dispose() async {
+  void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleLocalKeyEvent);
-    WidgetsBinding.instance.removeObserver(this);
-    // Close the session up-front. `gFFI.close()` below only calls `sessionClose`
-    // after several awaits (canvas save, image update, the `enable_soft_keyboard`
-    // platform call), so if the app is backgrounded while this page is disposing,
-    // dispose can be suspended before reaching it and the connection is never torn
-    // down. The reconnect then re-attaches to the leaked session and is stuck on
-    // "Connecting...". Dispatching it here makes teardown happen synchronously on
-    // pop; the `sessionClose` in `gFFI.close()` becomes a no-op once removed.
-    unawaited(bind.sessionClose(sessionId: sessionId));
-    // https://github.com/flutter/flutter/issues/64935
     super.dispose();
-    gFFI.dialogManager.hideMobileActionsOverlay(store: false);
-    gFFI.inputModel.listenToMouse(false);
-    gFFI.imageModel.disposeImage();
-    gFFI.cursorModel.disposeImages();
-    await gFFI.invokeMethod("enable_soft_keyboard", true);
+    final closing = _disposeSession();
+    OhosSessionWindow.trackDisposal(closing);
+    unawaited(closing);
+  }
+
+  Future<void> _disposeSession() async {
+    WidgetsBinding.instance.removeObserver(this);
+    final ffi = gFFI;
+    final sessionId = ffi.sessionId;
+    // Register the complete FFI close before the first await. A new mobile
+    // connection joins it instead of reusing the UUID during native teardown.
+    final closing = ffi.close();
+    ffi.dialogManager.hideMobileActionsOverlay(store: false);
+    ffi.inputModel.listenToMouse(false);
+    ffi.imageModel.disposeImage();
+    ffi.cursorModel.disposeImages();
+    ffi.dialogManager.dismissAll();
+    ffi.inputModel.keyboardInputAllowed = true;
+    _timer?.cancel();
+    _iosKeyboardWorkaroundTimer?.cancel();
+    removeSharedStates(widget.id);
+    await ffi.invokeMethod("enable_soft_keyboard", true);
     _mobileFocusNode.dispose();
     _physicalFocusNode.dispose();
     clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     _waylandKeyboardGateWorker?.dispose();
-    inputModel.keyboardInputAllowed = true;
-    await gFFI.close();
-    _timer?.cancel();
-    _iosKeyboardWorkaroundTimer?.cancel();
-    gFFI.dialogManager.dismissAll();
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-        overlays: SystemUiOverlay.values);
+    await closing;
+    if (!isOhos) {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+          overlays: SystemUiOverlay.values);
+    }
     WakelockManager.disable(_uniqueKey);
     await keyboardSubscription.cancel();
     removeSharedStates(widget.id);
@@ -526,56 +533,56 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       }
                     });
                   }),
-          bottomNavigationBar: Obx(() => Stack(
-                alignment: Alignment.bottomCenter,
-                children: [
-                  gFFI.ffiModel.pi.isSet.isTrue &&
-                          gFFI.ffiModel.waitForFirstImage.isTrue
-                      ? emptyOverlay(MyTheme.canvasColor)
-                      : () {
-                          gFFI.ffiModel.tryShowAndroidActionsOverlay();
-                          return Offstage();
-                        }(),
-                  _bottomWidget(),
-                  gFFI.ffiModel.pi.isSet.isFalse
-                      ? emptyOverlay(MyTheme.canvasColor)
-                      : Offstage(),
+          bottomNavigationBar: Obx(() => gFFI.ffiModel.pi.isSet.isTrue
+              ? _bottomWidget()
+              : const SizedBox.shrink()),
+          body: Obx(
+            () => Stack(fit: StackFit.expand, children: [
+              getRawPointerAndKeyBody(Overlay(
+                initialEntries: [
+                  OverlayEntry(builder: (context) {
+                    return Container(
+                      color: kColorCanvas,
+                      child: isWebDesktop
+                          ? getBodyForDesktopWithListener()
+                          : SafeArea(
+                              child:
+                                  OrientationBuilder(builder: (ctx, orientation) {
+                                if (_currentOrientation != orientation) {
+                                  Timer(const Duration(milliseconds: 200), () {
+                                    gFFI.dialogManager
+                                        .resetMobileActionsOverlay(ffi: gFFI);
+                                    _currentOrientation = orientation;
+                                    gFFI.canvasModel.updateViewStyle();
+                                  });
+                                }
+                                return Container(
+                                  color: MyTheme.canvasColor,
+                                  child: inputModel.isPhysicalMouse.value
+                                      ? getBodyForMobile()
+                                      : RawTouchGestureDetectorRegion(
+                                          child: getBodyForMobile(),
+                                          ffi: gFFI,
+                                        ),
+                                );
+                              }),
+                            ),
+                    );
+                  })
                 ],
               )),
-          body: Obx(
-            () => getRawPointerAndKeyBody(Overlay(
-              initialEntries: [
-                OverlayEntry(builder: (context) {
-                  return Container(
-                    color: kColorCanvas,
-                    child: isWebDesktop
-                        ? getBodyForDesktopWithListener()
-                        : SafeArea(
-                            child:
-                                OrientationBuilder(builder: (ctx, orientation) {
-                              if (_currentOrientation != orientation) {
-                                Timer(const Duration(milliseconds: 200), () {
-                                  gFFI.dialogManager
-                                      .resetMobileActionsOverlay(ffi: gFFI);
-                                  _currentOrientation = orientation;
-                                  gFFI.canvasModel.updateViewStyle();
-                                });
-                              }
-                              return Container(
-                                color: MyTheme.canvasColor,
-                                child: inputModel.isPhysicalMouse.value
-                                    ? getBodyForMobile()
-                                    : RawTouchGestureDetectorRegion(
-                                        child: getBodyForMobile(),
-                                        ffi: gFFI,
-                                      ),
-                              );
-                            }),
-                          ),
-                  );
-                })
-              ],
-            )),
+              // A waiting screen must cover the viewport, not reserve its
+              // height as a bottom bar: native first-image readiness requires
+              // the Texture underneath to receive a real paint first.
+              if (gFFI.ffiModel.pi.isSet.isFalse ||
+                  gFFI.ffiModel.waitForFirstImage.isTrue)
+                Positioned.fill(child: emptyOverlay(MyTheme.canvasColor))
+              else
+                () {
+                  gFFI.ffiModel.tryShowAndroidActionsOverlay();
+                  return const SizedBox.shrink();
+                }(),
+            ]),
           )),
     );
   }
@@ -708,7 +715,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         color: MyTheme.canvasColor,
         child: Stack(children: () {
           final paints = [
-            ImagePaint(ffiModel: gFFI.ffiModel),
+            // HarmonyOS shows the decoder's own Surface through this texture
+            // and keeps the picture here for everything else.
+            OhosVideoTextureLayer(
+              ffi: gFFI,
+              picture: ImagePaint(ffiModel: gFFI.ffiModel),
+            ),
             Positioned(
               top: 10,
               right: 10,

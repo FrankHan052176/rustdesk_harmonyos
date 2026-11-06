@@ -10,6 +10,7 @@ import 'package:flutter_hbb/models/state_model.dart';
 
 import '../../consts.dart';
 import '../../common/widgets/overlay.dart';
+import '../../common/widgets/ohos_video_texture.dart';
 import '../../common/widgets/remote_input.dart';
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
@@ -1265,9 +1266,16 @@ class _ImagePaintState extends State<ImagePaint> {
         sizeScale = s / displays[0].scale;
       }
     }
-    return CustomPaint(
+    final picture = CustomPaint(
       size: imageSize,
       painter: ImagePainter(image: m.image, x: 0, y: 0, scale: sizeScale),
+    );
+    if (!isOhos) return picture;
+    return SizedBox.fromSize(
+      size: imageSize,
+      child: OhosVideoTextureLayer(
+        ffi: widget.ffi, picture: picture, offset: Offset.zero, scale: s,
+      ),
     );
   }
 
@@ -1280,13 +1288,21 @@ class _ImagePaintState extends State<ImagePaint> {
         sizeScale = s / displays[0].scale;
       }
     }
-    return CustomPaint(
+    final picture = CustomPaint(
       size: Size(c.size.width, c.size.height),
       painter: ImagePainter(
           image: m.image,
           x: c.x / sizeScale,
           y: c.y / sizeScale,
           scale: sizeScale),
+    );
+    if (!isOhos) return picture;
+    return SizedBox.fromSize(
+      size: c.size,
+      child: OhosVideoTextureLayer(
+        ffi: widget.ffi, picture: picture,
+        offset: Offset(c.x, c.y), scale: sizeScale,
+      ),
     );
   }
 

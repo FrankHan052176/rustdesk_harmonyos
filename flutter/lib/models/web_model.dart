@@ -257,6 +257,35 @@ class PlatformFFI {
     keyListeners.clear();
   }
 
+  Future<List<String>> getSoundInputs() async => <String>[];
+
+  Future<void> selectSoundInput(String device) async {}
+
+  Future<bool> isWindowMaximized() async => false;
+
+  Future<void> minimizeWindow() async {}
+
+  Future<bool> toggleMaximizeWindow() async => false;
+
+  Future<void> startMovingWindow() async {}
+
+  Future<void> setKeepScreenOn(bool enabled) async {}
+
+  Future<String> getOhosDownloadDirectory() async =>
+      throw UnsupportedError('HarmonyOS Download directory is unavailable');
+
+  bool get isOhosHostCaptureRunning => false;
+
+  Future<void> setFullscreen(bool enabled) async {}
+
+  Future<void> terminateWindow() async {}
+
+  Future<String> startOhosHost() async => 'OHOS host is unavailable';
+
+  Future<String> stopOhosHost() async => '';
+
+  Future<void> closeWindow() async {}
+
   void setMethodCallHandler(FMethod callback) {}
 
   invokeMethod(String method, [dynamic arguments]) async {

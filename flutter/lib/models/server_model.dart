@@ -177,6 +177,17 @@ class ServerModel with ChangeNotifier {
         }
       }
 
+      if (isOhos) {
+        // The HarmonyOS controlled side has no platform service that echoes the
+        // keyboard permission back, so the option is the state the UI shows.
+        final inputOk =
+            bind.mainGetOptionSync(key: kOptionEnableKeyboard) != 'N';
+        if (_inputOk != inputOk) {
+          _inputOk = inputOk;
+          notifyListeners();
+        }
+      }
+
       updatePasswordModel();
     }
 
@@ -191,8 +202,8 @@ class ServerModel with ChangeNotifier {
       });
     }
 
-    // Initial keyboard status is off on mobile
-    if (isMobile) {
+    // Initial keyboard status is off on mobile (phones/tablets)
+    if (isMobile && !(isOhos && ohosDeviceType == '2in1')) {
       bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
     }
   }
@@ -221,6 +232,19 @@ class ServerModel with ChangeNotifier {
     final clipOption = await bind.mainGetOption(key: kOptionEnableClipboard);
     _clipboardOk = clipOption != 'N';
 
+    notifyListeners();
+  }
+
+  checkOhosPermission() async {
+    final audioOption = await bind.mainGetOption(key: kOptionEnableAudio);
+    final fileOption = await bind.mainGetOption(key: kOptionEnableFileTransfer);
+    final clipOption = await bind.mainGetOption(key: kOptionEnableClipboard);
+    final keyboardOption =
+        await bind.mainGetOption(key: kOptionEnableKeyboard);
+    _audioOk = audioOption != 'N';
+    _fileOk = fileOption != 'N';
+    _clipboardOk = clipOption != 'N';
+    _inputOk = keyboardOption != 'N';
     notifyListeners();
   }
 
@@ -335,6 +359,16 @@ class ServerModel with ChangeNotifier {
     if (clients.any((c) => !c.disconnected)) {
       await showClientsMayNotBeChangedAlert(parent.target);
     }
+    if (isOhos) {
+      // No platform service echoes the input permission back on HarmonyOS, so
+      // the keyboard option is the state this switch shows.
+      _inputOk = !_inputOk;
+      bind.mainSetOption(
+          key: kOptionEnableKeyboard,
+          value: _inputOk ? defaultOptionYes : 'N');
+      notifyListeners();
+      return;
+    }
     if (_inputOk) {
       parent.target?.invokeMethod("stop_input");
       bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
@@ -377,6 +411,14 @@ class ServerModel with ChangeNotifier {
 
   /// Toggle the screen sharing service.
   toggleService() async {
+    if (isOhos) {
+      if (_isStart) {
+        await stopService();
+      } else {
+        await startService();
+      }
+      return;
+    }
     if (_isStart) {
       final res = await parent.target?.dialogManager
           .show<bool>((setState, close, context) {
@@ -440,6 +482,25 @@ class ServerModel with ChangeNotifier {
 
   /// Start the screen sharing service.
   Future<void> startService() async {
+    if (isOhos) {
+      try {
+        final error = await platformFFI.startOhosHost();
+        if (error.isNotEmpty) {
+          throw Exception(error);
+        }
+        _isStart = true;
+        _mediaOk = platformFFI.isOhosHostCaptureRunning;
+        WakelockManager.enable(_wakelockKey, isServer: true);
+      } catch (error) {
+        _isStart = false;
+        _mediaOk = false;
+        debugPrint('Failed to start OHOS host: $error');
+        showToast(error.toString());
+      } finally {
+        notifyListeners();
+      }
+      return;
+    }
     _isStart = true;
     notifyListeners();
     parent.target?.ffiModel.updateEventListener(parent.target!.sessionId, "");
@@ -454,6 +515,19 @@ class ServerModel with ChangeNotifier {
 
   /// Stop the screen sharing service.
   Future<void> stopService() async {
+    if (isOhos) {
+      final error = await platformFFI.stopOhosHost();
+      if (error.isNotEmpty) {
+        showToast(error);
+      }
+      _isStart = false;
+      _mediaOk = false;
+      _inputOk = false;
+      closeAll();
+      WakelockManager.disable(_wakelockKey);
+      notifyListeners();
+      return;
+    }
     _isStart = false;
     closeAll();
     await parent.target?.invokeMethod("stop_service");

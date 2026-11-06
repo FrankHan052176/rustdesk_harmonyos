@@ -23,6 +23,7 @@ class _PixelbufferTexture {
   int get display => _display;
 
   create(int d, SessionID sessionId, FFI ffi) {
+    if (isOhos) return;
     _display = d;
     _textureKey = bind.getNextTextureKey();
     _sessionId = sessionId;
@@ -72,6 +73,7 @@ class _GpuTexture {
   _GpuTexture();
 
   create(int d, SessionID sessionId, FFI ffi) {
+    if (isOhos) return;
     if (support) {
       _sessionId = sessionId;
       _display = d;
@@ -181,7 +183,7 @@ class TextureModel {
   }
 
   updateCurrentDisplay(int curDisplay) {
-    if (isWeb) return;
+    if (isWeb || isOhos) return;
     final ffi = parent.target;
     if (ffi == null) return;
     tryCreateTexture(int idx) {

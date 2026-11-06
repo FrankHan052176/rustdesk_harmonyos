@@ -661,11 +661,14 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
 
   @override
   Widget build(BuildContext context) {
+    final serverModel = Provider.of<ServerModel>(context);
     final crossAxisCount = 4;
     final spacing = 10.0;
     final canModifyPermission =
         bind.mainGetBuildinOption(key: kOptionEnablePermChangeInAcceptWindow) !=
             'N';
+    final isKeyboardPermitted = !isOhos || serverModel.inputOk;
+    final isKeyboardEffective = client.keyboard && isKeyboardPermitted;
     return Container(
       width: double.infinity,
       height: 160.0,

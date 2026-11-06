@@ -17,6 +17,7 @@ import 'package:flutter_hbb/models/peer_tab_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/platform_channel.dart';
+import 'package:flutter_hbb/utils/ohos_session_window.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:get/get_rx/src/rx_workers/utils/debouncer.dart';
@@ -35,6 +36,7 @@ import 'mobile/pages/remote_page.dart';
 import 'mobile/pages/view_camera_page.dart';
 import 'mobile/pages/terminal_page.dart';
 import 'desktop/pages/remote_page.dart' as desktop_remote;
+import 'desktop/pages/remote_tab_page.dart';
 import 'desktop/pages/file_manager_page.dart' as desktop_file_manager;
 import 'desktop/pages/view_camera_page.dart' as desktop_view_camera;
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
@@ -52,6 +54,7 @@ final navigationBarKey = GlobalKey();
 
 final isAndroid = isAndroid_;
 final isIOS = isIOS_;
+final isOhos = isOhos_;
 final isWindows = isWindows_;
 final isMacOS = isMacOS_;
 final isLinux = isLinux_;
@@ -61,7 +64,25 @@ final isWebDesktop = isWebDesktop_;
 final isWebOnWindows = isWebOnWindows_;
 final isWebOnLinux = isWebOnLinux_;
 final isWebOnMacOs = isWebOnMacOS_;
-var isMobile = isAndroid || isIOS;
+var isMobile = isAndroid || isIOS || isOhos;
+String ohosDeviceType = '';
+/// A free-form window ("自由多窗" / PC mode) uses the desktop UI even on a tablet.
+final ohosFreeformWindow = ValueNotifier<bool>(false);
+bool get isOhosDesktop =>
+    isOhos && (ohosDeviceType == '2in1' || ohosFreeformWindow.value);
+bool get isDesktopUi => isDesktop || isOhosDesktop;
+
+/// HarmonyOS raises the system secure keyboard for [TextInputType.visiblePassword] inputs
+/// only, while Android and iOS raise it from an obscured field and treat the
+/// visible-password type as the plain, suggestion-free one.
+final TextInputType plainKeyboardType =
+    isOhos ? TextInputType.text : TextInputType.visiblePassword;
+
+/// Ask for the HarmonyOS system secure keyboard where the field is a real secret; every
+/// other platform already raises it for an obscured field.
+final TextInputType? secureKeyboardType =
+    isOhos ? TextInputType.visiblePassword : null;
+
 var version = '';
 int androidVersion = 0;
 
@@ -379,16 +400,6 @@ class MyTheme {
     appBarTheme: AppBarTheme(
       shadowColor: Colors.transparent,
     ),
-    dialogTheme: DialogTheme(
-      elevation: 15,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18.0),
-        side: BorderSide(
-          width: 1,
-          color: grayBg,
-        ),
-      ),
-    ),
     scrollbarTheme: scrollbarTheme,
     inputDecorationTheme: isDesktop
         ? InputDecorationTheme(
@@ -410,9 +421,6 @@ class MyTheme {
     cardColor: grayBg,
     hintColor: Color(0xFFAAAAAA),
     visualDensity: VisualDensity.adaptivePlatformDensity,
-    tabBarTheme: const TabBarTheme(
-      labelColor: Colors.black87,
-    ),
     tooltipTheme: tooltipTheme(),
     splashColor: (isDesktop || isWebDesktop) ? Colors.transparent : null,
     highlightColor: (isDesktop || isWebDesktop) ? Colors.transparent : null,
@@ -462,7 +470,7 @@ class MyTheme {
                   : Colors.transparent),
           borderRadius: BorderRadius.all(Radius.circular(8.0)),
         )),
-  ).copyWith(
+  )._withRustDeskComponents(
     extensions: <ThemeExtension<dynamic>>[
       ColorThemeExtension.light,
       TabbarTheme.light,
@@ -476,16 +484,6 @@ class MyTheme {
     dialogBackgroundColor: Color(0xFF18191E),
     appBarTheme: AppBarTheme(
       shadowColor: Colors.transparent,
-    ),
-    dialogTheme: DialogTheme(
-      elevation: 15,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18.0),
-        side: BorderSide(
-          width: 1,
-          color: Color(0xFF24252B),
-        ),
-      ),
     ),
     scrollbarTheme: scrollbarThemeDark,
     inputDecorationTheme: (isDesktop || isWebDesktop)
@@ -511,9 +509,6 @@ class MyTheme {
     ),
     cardColor: Color(0xFF24252B),
     visualDensity: VisualDensity.adaptivePlatformDensity,
-    tabBarTheme: const TabBarTheme(
-      labelColor: Colors.white70,
-    ),
     tooltipTheme: tooltipTheme(),
     splashColor: (isDesktop || isWebDesktop) ? Colors.transparent : null,
     highlightColor: (isDesktop || isWebDesktop) ? Colors.transparent : null,
@@ -569,7 +564,7 @@ class MyTheme {
       side: BorderSide(color: Colors.white24),
       borderRadius: BorderRadius.all(Radius.circular(8.0)),
     )),
-  ).copyWith(
+  )._withRustDeskComponents(
     extensions: <ThemeExtension<dynamic>>[
       ColorThemeExtension.dark,
       TabbarTheme.dark,
@@ -700,7 +695,7 @@ String formatDurationToTime(Duration duration) {
 }
 
 closeConnection({String? id}) {
-  if (isAndroid || isIOS) {
+  if (isAndroid || isIOS || (isOhos && !isOhosDesktop)) {
     () async {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
           overlays: SystemUiOverlay.values);
@@ -709,7 +704,7 @@ closeConnection({String? id}) {
       stateGlobal.isInMainPage = true;
     }();
   } else {
-    if (isWeb) {
+    if (isWeb || isOhos) {
       Navigator.popUntil(globalKey.currentContext!, ModalRoute.withName("/"));
       stateGlobal.isInMainPage = true;
     } else {
@@ -2190,7 +2185,7 @@ var webInitialLink = "";
 /// initUniLinks should only be used on macos/windows.
 /// we use dbus for linux currently.
 Future<bool> initUniLinks() async {
-  if (isLinux) {
+  if (isLinux || isOhos) {
     return false;
   }
   // check cold boot
@@ -2218,7 +2213,7 @@ Future<bool> initUniLinks() async {
 ///
 /// Returns a [StreamSubscription] which can listen the uni links.
 StreamSubscription? listenUniLinks({handleByFlutter = true}) {
-  if (isLinux || isWeb) {
+  if (isLinux || isOhos || isWeb) {
     return null;
   }
 
@@ -2578,8 +2573,14 @@ connect(BuildContext context, String id,
     bool forceRelay = false,
     String? password,
     String? connToken,
-    bool? isSharedPassword}) async {
+    bool? isSharedPassword,
+    bool openInCurrentWindow = false}) async {
   if (id == '') return;
+  if (isOhos && !isOhosDesktop) {
+    // The mobile page reuses gFFI and its UUID; finish the old owner's native
+    // teardown before constructing a new page and registering its listeners.
+    await gFFI.waitForClose();
+  }
   if (!isDesktop || desktopType == DesktopType.main) {
     try {
       if (Get.isRegistered<IDTextEditingController>()) {
@@ -2598,6 +2599,61 @@ connect(BuildContext context, String id,
   forceRelay = id != oldId || forceRelay;
   assert(!(isFileTransfer && isTcpTunneling && isRDP),
       "more than one connect type");
+
+  if (isOhosDesktop && !isTcpTunneling && !isRDP) {
+    // A separate session window needs its own UIAbility window, which this HarmonyOS Flutter
+    // port only offers through abilities (it has no subwindow rendering path).
+    // A 2in1 and a tablet's free-form window both host the session in its own window; a
+    // tablet that is not in free-form mode keeps it in the current window.
+    if (!openInCurrentWindow &&
+        (ohosDeviceType == '2in1' || ohosFreeformWindow.value)) {
+      try {
+        await platformFFI.openSessionWindow({
+          'id': id,
+          'isFileTransfer': isFileTransfer,
+          'isTerminal': isTerminal,
+          'forceRelay': forceRelay,
+          'password': password,
+          'connToken': connToken,
+          'isSharedPassword': isSharedPassword,
+        }, '${bind.mainGetAppNameSync()} - $id');
+      } catch (error) {
+        debugPrint('Failed to open OHOS session window (${error.runtimeType})');
+        showToast(translate('Failed to open a new window'));
+      }
+      return;
+    }
+    // A 2in1 device gets the desktop session UI: the desktop remote page centres the
+    // picture and its toolbar carries the real fullscreen act, which the mobile
+    // floating buttons do not offer.
+    final Widget page;
+    if (isFileTransfer) {
+      page = desktop_file_manager.FileManagerPage(
+          id: id, password: password, isSharedPassword: isSharedPassword);
+    } else if (isTerminal) {
+      page = TerminalPage(id: id, password: password, connToken: connToken,
+          isSharedPassword: isSharedPassword, forceRelay: forceRelay);
+    } else {
+      page = desktop_remote.RemotePage(
+          key: ValueKey(id),
+          id: id,
+          toolbarState: ToolbarState(),
+          password: password,
+          isSharedPassword: isSharedPassword,
+          forceRelay: forceRelay);
+    }
+    stateGlobal.isInMainPage = false;
+    // The session window hides the native decoration, so it draws the same tab bar the
+    // desktop platforms draw, window controls included.
+    final framed = OhosSessionTabPage(id: id, page: page);
+    await Navigator.of(context).push(PageRouteBuilder<void>(
+      pageBuilder: (_, __, ___) => framed,
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+    ));
+    if (!OhosSessionWindow.closing.value) await platformFFI.closeWindow();
+    return;
+  }
 
   if (isDesktop) {
     if (desktopType == DesktopType.main) {
@@ -2764,24 +2820,34 @@ class WakelockManager {
         return; // Don't enable wakelock if user disabled keep awake
       }
     }
-    if (isDesktop) {
+    if (isDesktopUi) {
       _enabledKeys.add(key);
     }
     if (!_enabled) {
       _enabled = true;
-      WakelockPlus.enable();
+      if (isOhos) {
+        platformFFI.setKeepScreenOn(true).catchError(
+            (error) => debugPrint('Failed to keep OHOS screen on: $error'));
+      } else {
+        WakelockPlus.enable();
+      }
     }
   }
 
   static void disable(UniqueKey key) {
-    if (isDesktop) {
+    if (isDesktopUi) {
       _enabledKeys.remove(key);
       if (_enabledKeys.isNotEmpty) {
         return;
       }
     }
     if (_enabled) {
-      WakelockPlus.disable();
+      if (isOhos) {
+        platformFFI.setKeepScreenOn(false).catchError((error) =>
+            debugPrint('Failed to release OHOS screen lock: $error'));
+      } else {
+        WakelockPlus.disable();
+      }
       _enabled = false;
     }
   }
@@ -2804,6 +2870,7 @@ void reloadCurrentWindow() {
 /// call this to reload all windows, including main + all sub windows.
 Future<void> reloadAllWindows() async {
   reloadCurrentWindow();
+  if (isOhos) return;
   try {
     final ids = await DesktopMultiWindow.getAllSubWindowIds();
     for (final id in ids) {
@@ -3127,6 +3194,14 @@ Future<bool> callMainCheckSuperUserPermission() async {
 }
 
 Future<void> start_service(bool is_start) async {
+  if (isOhos) {
+    if (is_start) {
+      await gFFI.serverModel.startService();
+    } else {
+      await gFFI.serverModel.stopService();
+    }
+    return;
+  }
   bool checked = !bind.mainIsInstalled() ||
       !isMacOS ||
       await callMainCheckSuperUserPermission();
@@ -4285,4 +4360,28 @@ Widget? buildAvatarWidget({
       errorBuilder: (_, __, ___) => fallback ?? SizedBox.shrink(),
     ),
   );
+}
+
+// Derive the component types from the SDK instead of naming its legacy or Data classes.
+extension _RustDeskComponentThemes on ThemeData {
+  ThemeData _withRustDeskComponents({
+    required Iterable<ThemeExtension<dynamic>> extensions,
+  }) {
+    return copyWith(
+      dialogTheme: dialogTheme.copyWith(
+        backgroundColor: scaffoldBackgroundColor,
+        elevation: 15,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18.0),
+          side: BorderSide(width: 1, color: cardColor),
+        ),
+      ),
+      tabBarTheme: tabBarTheme.copyWith(
+        labelColor: brightness == Brightness.light
+            ? Colors.black87
+            : Colors.white70,
+      ),
+      extensions: extensions,
+    );
+  }
 }

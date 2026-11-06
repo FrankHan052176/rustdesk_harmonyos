@@ -365,6 +365,7 @@ class FileController {
   var sortAscending = true;
   // Incremented for each navigation; only the latest generation applies results.
   int _directoryRequestGeneration = 0;
+  int _readyGeneration = 0;
   final JobController jobController;
   final WeakReference<FFI> rootState;
 
@@ -421,8 +422,28 @@ class FileController {
   }
 
   Future<void> onReady() async {
+    if (rootState.target?.closed != false) return;
+    final generation = ++_readyGeneration;
+    String? obsoleteLocalHome;
     if (isLocal) {
-      options.value.home = await bind.mainGetHomeDir();
+      final nativeHome = await bind.mainGetHomeDir();
+      if (generation != _readyGeneration) return;
+      var home = nativeHome;
+      if (isOhos) {
+        try {
+          home = await platformFFI.getOhosDownloadDirectory();
+        } catch (error) {
+          // The picker needs a live UIAbility context; keeping the native home
+          // stops a failed pick from aborting onReady and emptying both panels.
+          debugPrint(
+              'HarmonyOS download directory unavailable (${error.runtimeType})');
+        }
+      }
+      if (generation != _readyGeneration) return;
+      options.value.home = home;
+      if (isOhos && nativeHome != home) {
+        obsoleteLocalHome = nativeHome;
+      }
     }
     options.value.showHidden = (await bind.sessionGetPeerOption(
             sessionId: sessionId,
@@ -444,8 +465,10 @@ class FileController {
     }
     Future<bool> tryOpenReadyDirs() async {
       final dirs = <String>{
-        if (directory.value.path.isNotEmpty) directory.value.path,
-        if (savedDir.isNotEmpty) savedDir,
+        if (directory.value.path.isNotEmpty &&
+            directory.value.path != obsoleteLocalHome)
+          directory.value.path,
+        if (savedDir.isNotEmpty && savedDir != obsoleteLocalHome) savedDir,
         options.value.home,
       };
       for (final dir in dirs) {
