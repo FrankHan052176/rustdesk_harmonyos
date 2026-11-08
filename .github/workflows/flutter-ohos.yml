@@ -329,6 +329,40 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+      # A device installs a HAP, and only a HAP carries its own signing block;
+      # the module inside the signed App Pack does not. Package one with the
+      # same publish material so `hdc install` can replace an installed build
+      # without uninstalling it.
+      - name: Package the publish-signed OpenHarmony HAP
+        shell: bash
+        env:
+          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
+          OHOS_PACKAGE_KIND: hap
+          OHOS_BUILD_MODE: release
+          OHOS_PRODUCT: publish
+        run: |
+          rm -rf flutter/build/ohos
+          rm -rf flutter/ohos/build flutter/ohos/entry/build
+          bash scripts/build-ohos-flutter-hap.sh
+
+          signed_hap="$(find flutter/ohos -type f -name '*-signed.hap' 2>/dev/null | head -n 1)"
+          if [[ -z "$signed_hap" || ! -s "$signed_hap" ]]; then
+            echo "The HAP run produced no signed HAP." >&2
+            exit 1
+          fi
+          cp "$signed_hap" "rustdesk-$VERSION-ohos-arm64-signed.hap"
+          echo "Signed HAP: $signed_hap ($(wc -c < "$signed_hap") bytes)"
+
+      - name: Upload the publish-signed Flutter OpenHarmony HAP
+        if: ${{ inputs.upload-artifact }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rustdesk-flutter-ohos-publish-hap
+          path: rustdesk-${{ env.VERSION }}-ohos-arm64-signed.hap
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
       # Keep the verified publish-signed App Pack separate from the unsigned HAP.
       - name: Upload the signed Flutter OpenHarmony APP
         if: ${{ inputs.upload-artifact }}
