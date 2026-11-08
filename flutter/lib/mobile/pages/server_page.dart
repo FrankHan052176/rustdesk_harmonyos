@@ -657,6 +657,7 @@ class _PermissionCheckerState extends State<PermissionChecker> {
             translate("Input Control"),
             serverModel.inputOk,
             serverModel.toggleInput,
+            enabled: serverModel.inputControlSupported,
           ),
           PermissionRow(
             translate("Transfer file"),

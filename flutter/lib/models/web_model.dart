@@ -276,6 +276,8 @@ class PlatformFFI {
 
   bool get isOhosHostCaptureRunning => false;
 
+  bool get isOhosHostInputAuthorized => false;
+
   Future<void> setFullscreen(bool enabled) async {}
 
   Future<void> terminateWindow() async {}

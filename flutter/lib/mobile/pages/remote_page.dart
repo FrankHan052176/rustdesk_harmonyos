@@ -24,6 +24,7 @@ import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
 import '../../utils/image.dart';
+import '../../utils/ohos_ime.dart';
 import '../../utils/ohos_session_window.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
@@ -429,8 +430,34 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
     if (isIOS) {
       _handleIOSSoftKeyboardInput(newValue);
+    } else if (isOhos) {
+      _handleComposingSoftKeyboardInput(newValue);
     } else {
       _handleNonIOSSoftKeyboardInput(newValue);
+    }
+  }
+
+  /// HarmonyOS IMEs compose before they commit, so only committed text is
+  /// diffed. Typing the composing buffer would send the raw Pinyin/Kana input
+  /// and leave it on the remote when a candidate replaces it.
+  void _handleComposingSoftKeyboardInput(String newValue) {
+    final committed = committedSoftKeyboardText(
+        _textController.value.copyWith(text: newValue));
+    final diff = softKeyboardCommitDiff(_value, committed);
+    if (diff.backspaces == 0 && diff.text.isEmpty) {
+      return;
+    }
+    _value = committed;
+    for (var i = 0; i < diff.backspaces; ++i) {
+      inputModel.inputKey('VK_BACK');
+    }
+    if (diff.text.isEmpty) {
+      return;
+    }
+    if (diff.text.length > 1) {
+      bind.sessionInputString(sessionId: sessionId, value: diff.text);
+    } else {
+      inputChar(diff.text);
     }
   }
 

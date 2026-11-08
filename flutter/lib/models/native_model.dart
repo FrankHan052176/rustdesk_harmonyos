@@ -42,6 +42,11 @@ typedef _OhosCaptureStopC = Int32 Function();
 typedef _OhosCaptureStopDart = int Function();
 typedef _OhosCaptureRunningC = Int32 Function();
 typedef _OhosCaptureRunningDart = int Function();
+typedef _OhosHostInputStatusC = Int32 Function();
+typedef _OhosHostInputStatusDart = int Function();
+
+/// `ohos_flutter_host_input_status` reports this once the OS granted injection.
+const int ohosHostInputAuthorized = 2;
 
 /// The Linux bundle keeps the core library at lib/librustdesk.so next to the
 /// executable. Prefer that copy, mirroring flutter/linux/main.cc: the plain
@@ -93,12 +98,21 @@ class PlatformFFI {
   late final _OhosCaptureStartDart _ohosCaptureStart;
   late final _OhosCaptureStopDart _ohosCaptureStop;
   late final _OhosCaptureRunningDart _ohosCaptureRunning;
+  _OhosHostInputStatusDart? _ohosHostInputStatus;
 
   /// Whether the OpenHarmony core is capturing the screen for the controlled side.
   ///
   /// Capture counts as running from the moment the request is submitted, so this
   /// cannot tell a pending consent dialog apart from a granted capture.
   bool get isOhosHostCaptureRunning => isOhos && _ohosCaptureRunning() != 0;
+
+  /// Whether the core holds an OS authorization for injecting input into the
+  /// captured display. Without it every injected event is dropped, so the input
+  /// permission must stay off and must not be offered.
+  bool get isOhosHostInputAuthorized =>
+      isOhos &&
+      _ohosHostInputStatus != null &&
+      _ohosHostInputStatus!() == ohosHostInputAuthorized;
 
   static String get localeName => isOhos && _ohosLocaleName.isNotEmpty
       ? _ohosLocaleName
@@ -222,6 +236,13 @@ class PlatformFFI {
                 "ohos_capture_stop");
         _ohosCaptureRunning = dylib.lookupFunction<_OhosCaptureRunningC,
             _OhosCaptureRunningDart>("ohos_capture_running");
+        try {
+          _ohosHostInputStatus = dylib.lookupFunction<_OhosHostInputStatusC,
+              _OhosHostInputStatusDart>("ohos_flutter_host_input_status");
+        } on ArgumentError {
+          // A core without the injection ABI cannot inject input at all.
+          _ohosHostInputStatus = null;
+        }
       }
       try {
         if (isOhos) {

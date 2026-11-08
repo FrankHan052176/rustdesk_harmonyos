@@ -29,6 +29,10 @@ class ServerModel with ChangeNotifier {
   bool _isStart = false; // Android MainService status
   bool _mediaOk = false;
   bool _inputOk = false;
+
+  /// Whether this device can intercept input at all. Honest by construction:
+  /// only an OS injection authorization the core actually holds counts.
+  bool get inputControlSupported => platformFFI.isOhosHostInputAuthorized;
   bool _audioOk = false;
   bool _fileOk = false;
   bool _clipboardOk = false;
@@ -179,8 +183,10 @@ class ServerModel with ChangeNotifier {
 
       if (isOhos) {
         // The HarmonyOS controlled side has no platform service that echoes the
-        // keyboard permission back, so the option is the state the UI shows.
-        final inputOk =
+        // keyboard permission back, so the option is the state the UI shows. It
+        // only counts while the core holds an injection authorization; a device
+        // that cannot intercept input never gets one, so the switch stays off.
+        final inputOk = inputControlSupported &&
             bind.mainGetOptionSync(key: kOptionEnableKeyboard) != 'N';
         if (_inputOk != inputOk) {
           _inputOk = inputOk;
@@ -205,6 +211,12 @@ class ServerModel with ChangeNotifier {
     // Initial keyboard status is off on mobile (phones/tablets)
     if (isMobile && !(isOhos && ohosDeviceType == '2in1')) {
       bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
+    }
+    // Without an OS injection authorization no client input can reach this
+    // device, so the stored permission must not stay on for the next one.
+    if (isOhos && !inputControlSupported) {
+      bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
+      _inputOk = false;
     }
   }
 
@@ -356,6 +368,10 @@ class ServerModel with ChangeNotifier {
   }
 
   toggleInput() async {
+    if (isOhos && !inputControlSupported) {
+      // The device cannot intercept input, so there is nothing to toggle.
+      return;
+    }
     if (clients.any((c) => !c.disconnected)) {
       await showClientsMayNotBeChangedAlert(parent.target);
     }

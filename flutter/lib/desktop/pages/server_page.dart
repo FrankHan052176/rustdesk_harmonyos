@@ -667,7 +667,8 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
     final canModifyPermission =
         bind.mainGetBuildinOption(key: kOptionEnablePermChangeInAcceptWindow) !=
             'N';
-    final isKeyboardPermitted = !isOhos || serverModel.inputOk;
+    final isKeyboardPermitted = !isOhos ||
+        (serverModel.inputOk && serverModel.inputControlSupported);
     final isKeyboardEffective = client.keyboard && isKeyboardPermitted;
     return Container(
       width: double.infinity,
@@ -747,7 +748,8 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
                           });
                         },
                         translate('Enable keyboard/mouse'),
-                        canModify: canModifyPermission,
+                        canModify:
+                            canModifyPermission && serverModel.inputControlSupported,
                       ),
                       buildPermissionIcon(
                         client.clipboard,
