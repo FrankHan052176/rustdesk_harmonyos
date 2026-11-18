@@ -208,8 +208,9 @@ class ServerModel with ChangeNotifier {
       });
     }
 
-    // Initial keyboard status is off on mobile (phones/tablets)
-    if (isMobile && !(isOhos && ohosDeviceType == '2in1')) {
+    // Initial keyboard status is off on iOS and on HarmonyOS phones/tablets;
+    // Android syncs it from InputService natively.
+    if (isIOS || (isOhos && ohosDeviceType != '2in1')) {
       bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
     }
     // Without an OS injection authorization no client input can reach this

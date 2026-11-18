@@ -120,7 +120,16 @@ impl Drop for SimpleCallOnReturn {
     }
 }
 
+/// `sodium_init()` chooses libsodium's implementations, so it runs before anything else uses the
+/// library: a later call swaps Poly1305 under a computation another thread is in the middle of.
+pub fn init_sodium() {
+    if hbb_common::sodiumoxide::init().is_err() {
+        log::error!("Failed to initialize libsodium");
+    }
+}
+
 pub fn global_init() -> bool {
+    init_sodium();
     #[cfg(all(target_os = "linux", not(target_env = "ohos"), feature = "drm"))]
     crate::platform::linux::dispatch_wayland_display_probe();
     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
