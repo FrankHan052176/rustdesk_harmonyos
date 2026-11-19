@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="p1" x1="210" y1="430" x2="780" y2="290" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2AD8AE"/>
+      <stop offset="1" stop-color="#0D9488"/>
+    </linearGradient>
+    <linearGradient id="p2" x1="814" y1="594" x2="244" y2="734" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFB03A"/>
+      <stop offset="1" stop-color="#EA580C"/>
+    </linearGradient>
+    <linearGradient id="core" x1="454" y1="454" x2="570" y2="570" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#0F766E"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#p1)" d="M 226.88 390.10 A 298.00 298.00 0 0 1 776.46 447.86 A 44.00 44.00 0 0 1 691.87 472.12 A 210.00 210.00 0 0 0 304.58 431.41 A 44.00 44.00 0 0 1 226.88 390.10 Z"/>
+  <path fill="url(#p2)" d="M 797.12 633.90 A 298.00 298.00 0 0 1 247.54 576.14 A 44.00 44.00 0 0 1 332.13 551.88 A 210.00 210.00 0 0 0 719.42 592.59 A 44.00 44.00 0 0 1 797.12 633.90 Z"/>
+  <path fill="url(#core)" d="M 525.44 454.72 L 569.28 498.56 A 19.00 19.00 0 0 1 569.28 525.44 L 525.44 569.28 A 19.00 19.00 0 0 1 498.56 569.28 L 454.72 525.44 A 19.00 19.00 0 0 1 454.72 498.56 L 498.56 454.72 A 19.00 19.00 0 0 1 525.44 454.72 Z"/>
+</svg>

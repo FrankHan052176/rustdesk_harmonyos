@@ -117,7 +117,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("prepare", "record", "verify"))
     parser.add_argument("--core-root", type=Path,
-                        default=Path(os.environ.get("RUSTDESK_CORE_ROOT", ROOT / "target/ohos-port-upstream-d53391e")))
+                        default=Path(os.environ.get("RUSTDESK_CORE_ROOT", ROOT / "target/ohos-port-upstream-c48a4f1")))
     parser.add_argument("--check", action="store_true", help="prepare: check without fetching or applying changes")
     parser.add_argument("--artifact", type=Path)
     args = parser.parse_args()

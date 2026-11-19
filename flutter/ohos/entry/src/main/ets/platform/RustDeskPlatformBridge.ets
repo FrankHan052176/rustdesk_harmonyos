@@ -16,6 +16,7 @@ import {
   MethodResult,
 } from '@ohos/flutter_ohos';
 import { RustDeskSessionLaunch, RustDeskSessionWindows } from './RustDeskSessionWindows';
+import { disableImePreviewText, RustDeskKeyboardVisibility } from './RustDeskSoftKeyboard';
 import { RustDeskVideoTextures } from './RustDeskVideoTexture';
 
 const METHOD_CHANNEL_NAME = 'top.frankhan.resk.flutter/platform';
@@ -26,6 +27,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
   /// External video textures of the engine this plugin is attached to; `null`
   /// until an engine attaches and again once it detached.
   private videoTextures: RustDeskVideoTextures | null = null;
+  private keyboardVisibility: RustDeskKeyboardVisibility | null = null;
   private abilityContext: common.UIAbilityContext | null = null;
   private continuousTaskId: number | null = null;
   private continuousTaskStart: Promise<void> | null = null;
@@ -104,10 +106,14 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     // Video textures belong to exactly this engine: its texture registry hands
     // out the surface and only this binding may unregister it again.
     this.videoTextures = new RustDeskVideoTextures(binding.getTextureRegistry());
+    this.keyboardVisibility = new RustDeskKeyboardVisibility(
+      binding.getBinaryMessenger(), (): window.Window => this.requireMainWindow());
   }
 
   onDetachedFromEngine(binding: FlutterPluginBinding): void {
     this.stopObservingWindowFocus();
+    this.keyboardVisibility?.stop();
+    this.keyboardVisibility = null;
     this.sessionLaunch = null;
     // Hand back every surface this engine still owns through the same
     // deinit -> unregister path. It must not block this thread on the decoder
@@ -276,6 +282,11 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
             return null;
           });
           return;
+        case 'disableImePreviewText':
+          disableImePreviewText()
+            .then(() => result.success(null))
+            .catch((error: Error) => result.error('OHOS_IME_ERROR', this.errorMessage(error), null));
+          return;
         case 'startContinuousTask':
           this.startContinuousTask(result);
           return;
@@ -324,6 +335,14 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
       return;
     }
     action(textures);
+  }
+
+  private requireMainWindow(): window.Window {
+    const context = this.abilityContext;
+    if (context === null) {
+      throw new Error('HarmonyOS UIAbility context is unavailable');
+    }
+    return context.windowStage.getMainWindowSync();
   }
 
   private withMainWindow(

@@ -16,8 +16,8 @@ if [[ "$product" != "default" && "$product" != "publish" ]]; then
   echo "Unsupported OHOS_PRODUCT: $product" >&2
   exit 2
 fi
-if [[ "$package_kind" == "app" && ( "$build_mode" != "release" || "$product" != "publish" || -z "${RUSTDESK_SIGNING_DIR:-}" ) ]]; then
-  echo "APP packaging requires release mode, publish product, and RUSTDESK_SIGNING_DIR" >&2
+if [[ "$package_kind" == "app" && "$build_mode" != "release" ]]; then
+  echo "APP packaging requires release mode" >&2
   exit 2
 fi
 
@@ -41,10 +41,14 @@ python3 "$repo_root/scripts/ohos-port-core.py" verify
 backup=""
 dependency_backup=""
 dependency_backup_ready=false
+staged_changelog=""
 cleanup() {
   if [[ -n "$backup" && -f "$backup" ]]; then
     cp "$backup" "$profile"
     rm -f "$backup"
+  fi
+  if [[ -n "$staged_changelog" && -f "$staged_changelog" ]]; then
+    rm -f "$staged_changelog"
   fi
   if [[ -n "$dependency_backup" && -d "$dependency_backup" ]]; then
     if [[ "$dependency_backup_ready" != true ]]; then
@@ -108,6 +112,12 @@ fi
 dependency_backup_ready=true
 python3 "$repo_root/scripts/prepare-ohos-flutter.py"
 
+# Stage AGCD's generated changelog into rawfile when present; keep default behavior when absent.
+if [[ -f "$repo_root/agcd-changelog.json" ]]; then
+  staged_changelog="$flutter_root/ohos/entry/src/main/resources/rawfile/agcd-changelog.json"
+  cp "$repo_root/agcd-changelog.json" "$staged_changelog"
+fi
+
 # A new fork restarts GITHUB_RUN_NUMBER. Use a repository-independent UTC timestamp
 # for CI version codes so migration cannot produce an older AppGallery version.
 # Local builds keep the committed baseline; Flutter stamps CI's number into the APP.
@@ -125,6 +135,12 @@ PY
   build_number_arg=(--build-number "$derived_version_code")
 fi
 
+codesign_arg=()
+if [[ -z "${RUSTDESK_SIGNING_DIR:-}" ]]; then
+  codesign_arg=(--no-codesign)
+fi
+
 cd "$flutter_root"
 env -u RUSTDESK_SIGNING_DIR flutter build "$package_kind" "--$build_mode" --flavor "$product" \
+  ${codesign_arg[@]+"${codesign_arg[@]}"} \
   ${build_number_arg[@]+"${build_number_arg[@]}"} "$@"

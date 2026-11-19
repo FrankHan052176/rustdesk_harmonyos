@@ -55,20 +55,20 @@ import sys
 import tempfile
 import flutter_video
 
-CORE_SHA = "d53391e9b0b87a94c5ee1f8f40252acb25867395"
+CORE_SHA = "c48a4f109078ed27b0f9830cb85d27217988a60e"
 HBB_SHA = "75ef5d8cd9b2e817047fb2eb4c2a1cdac7141dbf"
 SOURCE_HASHES = {
-    "src/flutter.rs": "c7a377869fc6dad88d7e8afe292cf95eaa0358509e4eab03ffb169b3022bddde",
-    "src/flutter_ffi.rs": "400191f6761117e67562a68bb02cf0adb834e8e01134cbfc47ed0b634fa9d607",
-    "src/ohos_ffi.rs": "48495c87af79d3a39a0efff918bee1d908bf817e70c715f4921649e846e16335",
-    "src/server/connection.rs": "ab3277c768610219580381fe244197c0a4dcde3d8040d71b5bb897d5b63d4bd9",
+    "src/flutter.rs": "0903ee8aa4c9743268dc9e7d86bb4567c1e82b1704028f0cd3e70f4606e613e8",
+    "src/flutter_ffi.rs": "a2594fa3a08bfcc72fd4ba8a32989ef7bd884a9a40fe805c620a7ec729bd8b22",
+    "src/ohos_ffi.rs": "605c3ad74e2c91500c47d10e0aca91ff161829ce62882f0ad17de11c0de6be9c",
+    "src/server/connection.rs": "5bd90fb62b4c4d6660c1bc1b45a0ae034b664d17e1cf9f8de11bb17bfbf669a0",
     "src/ui_interface.rs": "0d26ed8a0826e8985184e139459d7efa92dc2ec602c1ba88d3a48e173a6c92e9",
     "src/keyboard.rs": "64357790e34d85a23a6d18f5eecb05e13e89de51b599060c7f5a6f55a03707a8",
-    "src/client.rs": "8cf52adb3e4af4c85862fdac8f02e8a018fa62f755fe927fb9b785c621f7a744",
-    "src/ui_session_interface.rs": "e5a0366e42f229e2ef25910bb2768a61850b97208ce5f8cba6f539e099470f52",
-    "src/client/io_loop.rs": "bba395026cb5d7e691807431b0e2700d3245700558642e7de9b679ccf9590c42",
-    "src/ipc.rs": "553407334d95d397d94865599a683165cc337161d4c43a37d0c86ff221e67cf5",
-    "src/lang.rs": "ba445488ddf44cfafc349c2d5d901f1c6869cfea839a083d7e20a3328d603c1a",
+    "src/client.rs": "157c71dec9e87fea6ac64f1380c3813a04b4524d96e40d1309beb6c4237b4ac5",
+    "src/ui_session_interface.rs": "63bd8f7f5b0f335cf36c924021a433bd532d077d36b02788c1f70efa47595e2a",
+    "src/client/io_loop.rs": "f2285e2721b716c5948f202f5eef6a649018c81347e085775b89e73ae459c91c",
+    "src/ipc.rs": "85326032ebc7514ea3da4a480f5acd79b078dc186656b80b9ae91054f84497a0",
+    "src/lang.rs": "aa5be8539fc87a329653ce10d8b1e9ed79dc1e54dc7559b1eae16558fdd0568f",
 }
 
 MOBILE = 'any(target_os = "android", target_os = "ios")'

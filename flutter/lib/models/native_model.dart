@@ -513,6 +513,14 @@ class PlatformFFI {
         .invokeMethod<void>('setFullscreen', {'enabled': enabled});
   }
 
+  /// Flutter-OH hands the text an input method is still composing to Dart as
+  /// ordinary text. Called once a text field has attached, this makes the
+  /// input method compose in its own bar and send only what it commits.
+  Future<void> disableImePreviewText() async {
+    if (!isOhos) return;
+    await _toOhosChannel.invokeMethod<void>('disableImePreviewText');
+  }
+
   Future<String> getOhosDownloadDirectory() async {
     if (!isOhos) {
       throw UnsupportedError('HarmonyOS Download directory is unavailable');

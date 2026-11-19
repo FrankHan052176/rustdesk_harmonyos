@@ -1,6 +1,6 @@
 # Flutter 鸿蒙客户端：作者上游内核接入
 
-源码固定为 [`wanghd114/rustdesk_harmonyos:ohos-port`](https://github.com/wanghd114/rustdesk_harmonyos/tree/ohos-port) 的 `d53391e9b0b87a94c5ee1f8f40252acb25867395`，精确来源见 `source.lock.json`。默认 checkout 为 `target/ohos-port-upstream-d53391e`。
+源码固定为 [`wanghd114/rustdesk_harmonyos:ohos-port`](https://github.com/wanghd114/rustdesk_harmonyos/tree/ohos-port) 的 `c48a4f109078ed27b0f9830cb85d27217988a60e`，精确来源见 `source.lock.json`。默认 checkout 为 `target/ohos-port-upstream-c48a4f1`。
 
 ## 维护边界
 
@@ -21,7 +21,7 @@
 
 被控初始化、服务和捕获使用作者现成的 `ohos_init`、`ohos_server_*`、`ohos_capture_*` C ABI。配置目录遵循作者 `ohos_init` 设置的 `HOME` 及原版 hbb_common，不承诺旧 fork 配置迁移或功能等价。
 
-本分支基于作者的 `ohos-port` 提交，根目录 Rust 源码与作者基线保持一致。Flutter 构建在独立 checkout 上应用薄适配，不修改根 Rust 工作区，也不包含旧 fork 的内核或旧 HAR 构建入口。
+本分支基于作者的 `ohos-port` 提交，并已合入 `rustdesk/rustdesk` master（`985429669`）。根目录 Rust 源码因此是作者基线加上 master 的新提交；Flutter 构建仍使用 `source.lock.json` 固定的作者内核，不含这些 master 提交，待作者把 `ohos-port` 变基到 master 后再更新固定版本。Flutter 构建在独立 checkout 上应用薄适配，不修改根 Rust 工作区，也不包含旧 fork 的内核或旧 HAR 构建入口。
 
 ## 构建
 
@@ -42,7 +42,7 @@ bash scripts/build-ohos-ffi.sh
 RUSTDESK_SIGNING_DIR=/path/to/RustDesk-Flutter-signing bash scripts/build-ohos-flutter-hap.sh
 ```
 
-签名资料不随仓库提交。本地 `signingConfigs.json` 由 `RUSTDESK_SIGNING_DIR` 指定；CI 的 publish 签名从 Actions secret `OHOS_RELEASE_SIGNING_BASE64` 注入。
+签名资料不随仓库提交。GitHub Actions 仅产出无签名 Release HAP，不配置签名密钥、不直推 AGC；本地无签名 Release HAP/APP（未设置 `RUSTDESK_SIGNING_DIR` 时自动传 `--no-codesign`）交给本地 AGCD 接管签名与上架，本地调试签名仍可通过 `RUSTDESK_SIGNING_DIR` 指定 `signingConfigs.json`。
 
 需要 OHOS NDK、Rust `aarch64-unknown-linux-ohos` target、Flutter OHOS SDK、FRB codegen 1.80.1，以及可用的 Cargo/Pub 缓存。缓存指向 NAS 时须先挂载，不创建替代缓存。`RUSTDESK_CORE_ROOT` 可指定同一固定提交的独立 checkout；不接受未知源码修改。
 

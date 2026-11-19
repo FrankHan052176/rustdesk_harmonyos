@@ -145,6 +145,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     gFFI.qualityMonitorModel.checkShowQualityMonitor(sessionId);
     keyboardSubscription =
         keyboardVisibilityController.onChange.listen(onSoftKeyboardChanged);
+    _mobileFocusNode.addListener(_onOhosSoftKeyboardFocusChanged);
     gFFI.chatModel
         .changeCurrentKey(MessageKey(widget.id, ChatModel.clientModeID));
     _blockableOverlayState.applyFfi(gFFI);
@@ -235,7 +236,45 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
+      _disableOhosImePreviewText();
     }
+  }
+
+  /// On HarmonyOS the soft-keyboard session follows the focus of its text
+  /// field: Flutter-OH attaches the input method when the field takes the
+  /// focus, and closes the input connection and unfocuses the field when the
+  /// user dismisses the input method.
+  void _onOhosSoftKeyboardFocusChanged() {
+    if (!isOhos || !mounted) return;
+    if (_mobileFocusNode.hasFocus) {
+      _disableOhosImePreviewText();
+      return;
+    }
+    if (!_showEdit) return;
+    // Unless something else took the focus, it fell back to the scope around
+    // the field, where no key reaches the remote.
+    final dismissed =
+        FocusManager.instance.primaryFocus == _mobileFocusNode.enclosingScope;
+    setState(() => _showEdit = false);
+    if (dismissed) {
+      gFFI.invokeMethod("enable_soft_keyboard", false);
+      _physicalFocusNode.requestFocus();
+    }
+  }
+
+  /// Flutter-OH turns the input method's text preview back on every time it
+  /// attaches the soft-keyboard field: when the field takes the focus and when
+  /// the window is active again. The preview arrives as ordinary text, so the
+  /// Pinyin still being composed would be typed on the remote.
+  void _disableOhosImePreviewText() {
+    if (!isOhos) return;
+    // Runs after the field's own focus handler, so that the request follows
+    // the attach it corrects.
+    Timer.run(() {
+      if (!mounted || !_mobileFocusNode.hasFocus) return;
+      platformFFI.disableImePreviewText().catchError((error) =>
+          debugPrint('Failed to disable the OHOS IME text preview: $error'));
+    });
   }
 
   // For client side
@@ -292,6 +331,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
+    if (isOhos) {
+      // HarmonyOS only reports a docked keyboard, not a floating one or the
+      // candidate bar of a hardware keyboard. Showing the system bars for the
+      // keyboard, as below, would leave them up, and the bottom bar lifted by
+      // the navigation indicator, whenever no "hidden" event follows. So the
+      // visibility only lays out the page here; the focus of the text field
+      // ends the soft-keyboard session.
+      if (mounted) setState(() {});
+      return;
+    }
     if (!visible) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
@@ -431,23 +480,20 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (isIOS) {
       _handleIOSSoftKeyboardInput(newValue);
     } else if (isOhos) {
-      _handleComposingSoftKeyboardInput(newValue);
+      _handleOhosSoftKeyboardInput(newValue);
     } else {
       _handleNonIOSSoftKeyboardInput(newValue);
     }
   }
 
-  /// HarmonyOS IMEs compose before they commit, so only committed text is
-  /// diffed. Typing the composing buffer would send the raw Pinyin/Kana input
-  /// and leave it on the remote when a candidate replaces it.
-  void _handleComposingSoftKeyboardInput(String newValue) {
-    final committed = committedSoftKeyboardText(
-        _textController.value.copyWith(text: newValue));
-    final diff = softKeyboardCommitDiff(_value, committed);
+  /// A HarmonyOS input method replaces text it sent earlier, which the
+  /// length-only diff answers with a single backspace.
+  void _handleOhosSoftKeyboardInput(String newValue) {
+    final diff = softKeyboardCommitDiff(_value, newValue);
     if (diff.backspaces == 0 && diff.text.isEmpty) {
       return;
     }
-    _value = committed;
+    _value = newValue;
     for (var i = 0; i < diff.backspaces; ++i) {
       inputModel.inputKey('VK_BACK');
     }
@@ -474,6 +520,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   void openKeyboard() {
+    if (isOhos && _showEdit && _mobileFocusNode.hasFocus) {
+      // A floating keyboard and the candidate bar of a hardware keyboard are
+      // not reported as a visible keyboard, so nothing else offers to dismiss
+      // them.
+      setState(() => _showEdit = false);
+      gFFI.invokeMethod("enable_soft_keyboard", false);
+      _mobileFocusNode.unfocus();
+      _physicalFocusNode.requestFocus();
+      return;
+    }
     final allowWaylandKeyboard =
         mainGetPeerBoolOptionSync(widget.id, kPeerOptionAllowWaylandKeyboard);
     if (shouldShowWaylandKeyboardPrompt(
@@ -509,8 +565,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       setState(() => _showEdit = true);
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-            overlays: SystemUiOverlay.values);
+        // HarmonyOS keeps the system bars hidden, see onSoftKeyboardChanged.
+        if (!isOhos) {
+          SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+              overlays: SystemUiOverlay.values);
+        }
         _mobileFocusNode.requestFocus();
       });
     });

@@ -9,22 +9,12 @@ on:
       publish-release:
         type: boolean
         default: false
-      upload-agc:
-        type: boolean
-        default: false
       upload-tag:
         type: string
         default: nightly
       version:
         type: string
         default: 1.5.0
-    secrets:
-      OHOS_RELEASE_SIGNING_BASE64:
-        required: true
-      AGC_CLIENT_ID:
-        required: false
-      AGC_CLIENT_SECRET:
-        required: false
 
 permissions:
   contents: write
@@ -233,22 +223,12 @@ jobs:
           test -s "$packaged"
           file "$packaged"
 
-      - name: Prepare OHOS release signing material
+      - name: Package unsigned Flutter OpenHarmony HAP
         shell: bash
         env:
-          OHOS_RELEASE_SIGNING_BASE64: ${{ secrets.OHOS_RELEASE_SIGNING_BASE64 }}
-          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
-        run: |
-          python3 .github/scripts/prepare-ohos-signing.py "$RUSTDESK_SIGNING_DIR"
-          echo "RUSTDESK_SIGNING_DIR=$RUSTDESK_SIGNING_DIR" >> "$GITHUB_ENV"
-
-      - name: Package signed Flutter OpenHarmony APP
-        shell: bash
-        env:
-          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
-          OHOS_PACKAGE_KIND: app
+          OHOS_PACKAGE_KIND: hap
           OHOS_BUILD_MODE: release
-          OHOS_PRODUCT: publish
+          OHOS_PRODUCT: default
         run: |
           for attempt in 1 2 3; do
             rm -rf flutter/build/ohos
@@ -263,53 +243,7 @@ jobs:
             sleep $((attempt * 30))
           done
 
-      - name: Verify signed Flutter OpenHarmony APP
-        shell: bash
-        env:
-          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
-        run: |
-          app_list="$(find flutter/ohos/build -type f -name '*-signed.app' 2>/dev/null || true)"
-          app_count="$(printf '%s\n' "$app_list" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
-          if [[ "$app_count" != 1 ]]; then
-            echo "Expected exactly one signed App, found $app_count." >&2
-            exit 1
-          fi
-          signed_app="$(printf '%s\n' "$app_list" | sed '/^$/d' | head -n 1)"
-          test -s "$signed_app"
-
-          signing_dir="$(cd "$RUSTDESK_SIGNING_DIR" && pwd)"
-          publish_profile="$signing_dir/RustDesk_UO_PublishRelease.p7b"
-          test -s "$publish_profile"
-
-          sign_tool=""
-          for sdk_home in "${HOS_SDK_HOME:-}" "${DEVECO_SDK_HOME:-}" "${OHOS_SDK_HOME:-}"; do
-            [[ -n "$sdk_home" ]] || continue
-            for candidate in \
-              "$sdk_home/default/openharmony/toolchains/lib/hap-sign-tool.jar" \
-              "$sdk_home/openharmony/toolchains/lib/hap-sign-tool.jar" \
-              "$sdk_home/toolchains/lib/hap-sign-tool.jar"; do
-              if [[ -r "$candidate" ]]; then
-                sign_tool="$candidate"
-                break 2
-              fi
-            done
-          done
-          if [[ -z "$sign_tool" ]]; then
-            echo "hap-sign-tool.jar was not found in the configured HarmonyOS SDK." >&2
-            exit 1
-          fi
-
-          python3 scripts/verify-ohos-release.py "$signed_app" \
-            --profile "$publish_profile" \
-            --sign-tool "$sign_tool"
-          OHOS_RELEASE_TEST_APP="$signed_app" \
-          OHOS_RELEASE_TEST_PROFILE="$publish_profile" \
-          OHOS_RELEASE_TEST_SIGN_TOOL="$sign_tool" \
-            python3 scripts/test_ohos_release.py
-
-          cp "$signed_app" "rustdesk-$VERSION-ohos-arm64.app"
-
-      - name: Stage the unsigned OpenHarmony HAP
+      - name: Stage and verify unsigned OpenHarmony HAP
         shell: bash
         run: |
           unsigned_hap="$(find flutter/ohos -type f -name '*-unsigned.hap' 2>/dev/null | head -n 1)"
@@ -317,6 +251,24 @@ jobs:
             echo "The packaging run produced no unsigned HAP." >&2
             exit 1
           fi
+          UNSIGNED_HAP="$unsigned_hap" python3 - <<'PY'
+          import importlib.util
+          import os
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location('verify_release', 'scripts/verify-ohos-release.py')
+          verify = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(verify)
+          hap = Path(os.environ['UNSIGNED_HAP'])
+          label = hap.name
+          document = verify._module_document(hap, label)
+          application = verify._check_bundle(document, label)
+          verify._check_release_semantics(application, label)
+          verify._check_module_content(hap, label)
+          verify._check_native_payload(hap, label)
+          print(f'Verified unsigned release HAP: {label}')
+          PY
+          python3 scripts/test_ohos_release.py
           cp "$unsigned_hap" "rustdesk-$VERSION-ohos-arm64-unsigned.hap"
 
       - name: Upload Flutter OpenHarmony HAP
@@ -329,77 +281,8 @@ jobs:
           compression-level: 0
           retention-days: 14
 
-      # A device installs a HAP, and only a HAP carries its own signing block;
-      # the module inside the signed App Pack does not. Package one with the
-      # same publish material so `hdc install` can replace an installed build
-      # without uninstalling it.
-      - name: Package the publish-signed OpenHarmony HAP
-        shell: bash
-        env:
-          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
-          OHOS_PACKAGE_KIND: hap
-          OHOS_BUILD_MODE: release
-          OHOS_PRODUCT: publish
-        run: |
-          rm -rf flutter/build/ohos
-          rm -rf flutter/ohos/build flutter/ohos/entry/build
-          bash scripts/build-ohos-flutter-hap.sh
-
-          signed_hap="$(find flutter/ohos -type f -name '*-signed.hap' 2>/dev/null | head -n 1)"
-          if [[ -z "$signed_hap" || ! -s "$signed_hap" ]]; then
-            echo "The HAP run produced no signed HAP." >&2
-            exit 1
-          fi
-          cp "$signed_hap" "rustdesk-$VERSION-ohos-arm64-signed.hap"
-          echo "Signed HAP: $signed_hap ($(wc -c < "$signed_hap") bytes)"
-
-      - name: Upload the publish-signed Flutter OpenHarmony HAP
-        if: ${{ inputs.upload-artifact }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: rustdesk-flutter-ohos-publish-hap
-          path: rustdesk-${{ env.VERSION }}-ohos-arm64-signed.hap
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
-      # Keep the verified publish-signed App Pack separate from the unsigned HAP.
-      - name: Upload the signed Flutter OpenHarmony APP
-        if: ${{ inputs.upload-artifact }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: rustdesk-flutter-ohos-publish-app
-          path: rustdesk-${{ env.VERSION }}-ohos-arm64.app
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
-
-      # Uploads the verified signed App Pack and submits it as an AppGallery Connect test
-      # version (no production release, nothing goes to review).
-      - name: Upload the Flutter OpenHarmony APP and submit an AGC test version
-        if: ${{ inputs.upload-agc }}
-        shell: bash
-        env:
-          AGC_CLIENT_ID: ${{ secrets.AGC_CLIENT_ID }}
-          AGC_CLIENT_SECRET: ${{ secrets.AGC_CLIENT_SECRET }}
-          # Override with the RustDesk AppGallery application configured for this repository.
-          AGC_APP_ID: ${{ vars.AGC_APP_ID || '6917615823381371195' }}
-          AGC_API_DOMAIN: ${{ vars.AGC_API_DOMAIN || 'connect-api.cloud.huawei.com' }}
-          # The open test window: starts an hour after submission and runs two months.
-          AGC_TEST_DURATION_DAYS: ${{ vars.AGC_TEST_DURATION_DAYS || '60' }}
-          # How long a single part of the App Pack may take: the upload is multipart, so this
-          # bounds one part rather than the whole file.
-          AGC_UPLOAD_MAX_TIME_SECONDS: ${{ vars.AGC_UPLOAD_MAX_TIME_SECONDS || '240' }}
-          AGC_EVENT_NAME: ${{ github.event_name }}
-          AGC_RUN_ATTEMPT: ${{ github.run_attempt }}
-          AGC_WORKFLOW_SHA: ${{ github.sha }}
-          AGC_PUSH_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-        run: |
-          bash .github/scripts/agc-test-release.sh "rustdesk-$VERSION-ohos-arm64.app"
-
-      # The release carries the unsigned HAP so a user can sign it themselves; the
-      # publish-signed App Pack travels as its own workflow artifact, and reaches
-      # AppGallery Connect whenever the submission above ran.
+      # The release carries only the unsigned HAP; signing and AppGallery Connect submission are
+      # handled locally by AGCD.
       - name: Publish Flutter OpenHarmony HAP
         if: ${{ inputs.publish-release }}
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
@@ -417,18 +300,3 @@ jobs:
         with:
           path: ${{ runner.temp }}/flutter-ohos
           key: flutter-ohos-${{ runner.os }}-${{ env.FLUTTER_OH_VERSION }}-${{ github.run_id }}
-
-      - name: Remove OHOS release signing material
-        if: always()
-        shell: bash
-        env:
-          RUSTDESK_SIGNING_DIR: ${{ runner.temp }}/rustdesk-ohos-signing
-        run: |
-          case "$RUSTDESK_SIGNING_DIR" in
-            */rustdesk-ohos-signing) ;;
-            *)
-              echo "Unexpected signing directory: $RUSTDESK_SIGNING_DIR" >&2
-              exit 1
-              ;;
-          esac
-          rm -rf "$RUSTDESK_SIGNING_DIR"

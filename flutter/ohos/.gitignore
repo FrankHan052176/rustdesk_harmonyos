@@ -15,6 +15,7 @@
 /package-lock.json
 
 **/src/main/resources/rawfile/flutter_assets/
+**/src/main/resources/rawfile/agcd-changelog.json
 **/libs/**/libapp.so
 **/libs/**/libflutter.so
 **/libs/**/libvmservice_snapshot.so
