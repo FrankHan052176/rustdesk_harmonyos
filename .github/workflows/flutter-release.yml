@@ -1,11 +1,14 @@
 name: Flutter Release Build
 
-# This repository has one entry point for the HarmonyOS leg, and it is manual: a commit does not
-# ship a build automatically. CI builds only an unsigned Release OpenHarmony HAP (no signing
-# secrets and no AppGallery Connect upload live in GitHub Actions); local AGCD downloads the
-# artifact or runs local builds for signing and AGC distribution. The other platforms stay parked
-# in flutter-build.yml.
+# CI builds only an unsigned Release OpenHarmony HAP (no signing secrets and no AppGallery Connect
+# upload live in GitHub Actions). Pushing to `ohos-port` produces the `rustdesk-flutter-ohos-hap`
+# artifact automatically for local AGCD to download, sign and distribute; manual `workflow_dispatch`
+# additionally allows overriding the stamped version or publishing the unsigned HAP as a GitHub
+# prerelease. The other platforms stay parked in flutter-build.yml.
 on:
+  push:
+    branches:
+      - ohos-port
   workflow_dispatch:
     inputs:
       publish-release:
@@ -46,9 +49,8 @@ jobs:
       contents: write
     with:
       upload-artifact: true
-      # Every run is manual now, so an artifact build is what a run does by default: nothing is
-      # published unless the operator asked for the prerelease on the dispatch form. The dispatch
-      # inputs are read as strings, so an unticked box stays false.
-      publish-release: ${{ github.event.inputs.publish-release == 'true' }}
+      # A push only uploads the unsigned HAP artifact for AGCD; a GitHub prerelease is published
+      # only when explicitly ticked on a manual workflow_dispatch form.
+      publish-release: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish-release == 'true' }}
       upload-tag: "nightly"
       version: ${{ github.event.inputs.version || '1.5.0' }}
