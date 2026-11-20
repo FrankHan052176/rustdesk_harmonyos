@@ -16,9 +16,9 @@ on:
         type: boolean
         default: false
       version:
-        description: "Version stamped into the artifact file names"
+        description: "Version stamped into the artifact file names (defaults to flutter/pubspec.yaml)"
         type: string
-        default: "1.5.0"
+        default: ""
 
 concurrency:
   group: flutter-release
@@ -53,4 +53,4 @@ jobs:
       # only when explicitly ticked on a manual workflow_dispatch form.
       publish-release: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish-release == 'true' }}
       upload-tag: "nightly"
-      version: ${{ github.event.inputs.version || '1.5.0' }}
+      version: ${{ github.event.inputs.version || '' }}

@@ -14,7 +14,7 @@ on:
         default: nightly
       version:
         type: string
-        default: 1.5.0
+        default: ""
 
 permissions:
   contents: write
@@ -24,7 +24,6 @@ env:
   FLUTTER_OH_VERSION: 3.41.10-ohos-0.0.2-beta
   FLUTTER_RUST_BRIDGE_VERSION: 1.80.1
   OHOS_COMMAND_LINE_TOOLS_VERSION: 26.0.0.821
-  VERSION: ${{ inputs.version || '1.5.0' }}
 
 jobs:
   build-rustdesk-ohos-flutter:
@@ -37,6 +36,22 @@ jobs:
         with:
           submodules: recursive
           persist-credentials: false
+
+      - name: Resolve artifact version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION:-}"
+          if [[ -z "$version" ]]; then
+            version="$(sed -n 's/^version:[[:space:]]*\([^[:space:]+]*\).*/\1/p' flutter/pubspec.yaml | head -n 1)"
+          fi
+          if [[ -z "$version" ]]; then
+            echo "Could not resolve version from inputs.version or flutter/pubspec.yaml" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Resolved artifact version: $version"
 
       - name: Install native build prerequisites
         shell: bash
