@@ -69,6 +69,7 @@ SOURCE_HASHES = {
     "src/client/io_loop.rs": "f2285e2721b716c5948f202f5eef6a649018c81347e085775b89e73ae459c91c",
     "src/ipc.rs": "85326032ebc7514ea3da4a480f5acd79b078dc186656b80b9ae91054f84497a0",
     "src/lang.rs": "aa5be8539fc87a329653ce10d8b1e9ed79dc1e54dc7559b1eae16558fdd0568f",
+    "libs/scrap/src/ohos/ohcodec.rs": "0bb6fd055f4db1ca465c29a8a31429a4c6ab02408ddc9eb33af079fd3af087b2",
 }
 
 MOBILE = 'any(target_os = "android", target_os = "ios")'
@@ -359,6 +360,25 @@ def patch_lang(text):
     )
 
 
+def patch_ohcodec(text):
+    # OH_MD_KEY_FRAME_RATE has value type double in HarmonyOS AVFormat; passing
+    # it through OH_AVFormat_SetIntValue fails type validation ("Key's value
+    # type does not match int32, key: frame_rate"), causing both H.264 and
+    # H.265 hardware encoder probes and creation to fail and fall back to VP9.
+    text = replace(
+        text,
+        '    fn OH_AVFormat_SetLongValue(format: *mut c_void, key: *const c_char, value: i64) -> bool;\n',
+        '    fn OH_AVFormat_SetLongValue(format: *mut c_void, key: *const c_char, value: i64) -> bool;\n'
+        '    fn OH_AVFormat_SetDoubleValue(format: *mut c_void, key: *const c_char, value: f64) -> bool;\n',
+    )
+    return replace(
+        text,
+        'OH_AVFormat_SetIntValue(fmt, OH_MD_KEY_FRAME_RATE, DEFAULT_FPS)',
+        'OH_AVFormat_SetDoubleValue(fmt, OH_MD_KEY_FRAME_RATE, DEFAULT_FPS as f64)',
+        2,
+    )
+
+
 PATCHES = {
     "src/flutter.rs": patch_flutter,
     "src/flutter_ffi.rs": patch_flutter_ffi,
@@ -371,6 +391,7 @@ PATCHES = {
     "src/client/io_loop.rs": patch_client_io_loop,
     "src/ipc.rs": patch_ipc,
     "src/lang.rs": patch_lang,
+    "libs/scrap/src/ohos/ohcodec.rs": patch_ohcodec,
 }
 
 

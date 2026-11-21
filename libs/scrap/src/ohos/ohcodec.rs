@@ -92,6 +92,7 @@ extern "C" {
     fn OH_VideoEncoder_FreeOutputBuffer(codec: *mut c_void, index: c_uint) -> c_int;
     fn OH_AVFormat_Create() -> *mut c_void;
     fn OH_AVFormat_SetLongValue(format: *mut c_void, key: *const c_char, value: i64) -> bool;
+    fn OH_AVFormat_SetDoubleValue(format: *mut c_void, key: *const c_char, value: f64) -> bool;
 }
 
 // Exported constants in libnative_media_core.so; linked by name instead of
@@ -212,7 +213,7 @@ fn probe_encoder(mime: &str) -> bool {
                     BITRATE_MODE_CBR,
                 )
                 && OH_AVFormat_SetLongValue(fmt, OH_MD_KEY_BITRATE, 2_000_000)
-                && OH_AVFormat_SetIntValue(fmt, OH_MD_KEY_FRAME_RATE, DEFAULT_FPS)
+                && OH_AVFormat_SetDoubleValue(fmt, OH_MD_KEY_FRAME_RATE, DEFAULT_FPS as f64)
                 && OH_AVFormat_SetIntValue(fmt, OH_MD_KEY_I_FRAME_INTERVAL, DEFAULT_GOP_MS)
         } && unsafe { OH_VideoEncoder_Configure(codec, fmt) } == AV_ERR_OK
             && unsafe { OH_VideoEncoder_Prepare(codec) } == AV_ERR_OK;
@@ -485,7 +486,7 @@ impl EncoderApi for OhCodecEncoder {
                             OH_MD_KEY_BITRATE,
                             bitrate as i64 * 1000,
                         )
-                        && OH_AVFormat_SetIntValue(fmt, OH_MD_KEY_FRAME_RATE, DEFAULT_FPS)
+                        && OH_AVFormat_SetDoubleValue(fmt, OH_MD_KEY_FRAME_RATE, DEFAULT_FPS as f64)
                         && OH_AVFormat_SetIntValue(fmt, OH_MD_KEY_I_FRAME_INTERVAL, gop_ms)
                 };
                 let rc = if ok {

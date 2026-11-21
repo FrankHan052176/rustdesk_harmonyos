@@ -99,8 +99,8 @@ export CC_aarch64_unknown_linux_ohos="$clang"
 export CXX_aarch64_unknown_linux_ohos="$clangxx"
 export AR_aarch64_unknown_linux_ohos="$ar"
 export RANLIB_aarch64_unknown_linux_ohos="$ranlib"
-# cmake-rs builds (libs/rd_engine/native/vnc) resolve target libraries such as zlib from the
-# NDK sysroot through the official toolchain file, as scripts/build-lib*-ohos.sh already do.
+# CMake builds resolve target libraries such as zlib from the NDK sysroot through
+# the official toolchain file, as scripts/build-lib*-ohos.sh already do.
 export CMAKE_TOOLCHAIN_FILE_aarch64_unknown_linux_ohos="${CMAKE_TOOLCHAIN_FILE_aarch64_unknown_linux_ohos:-$OHOS_NDK_HOME/native/build/cmake/ohos.toolchain.cmake}"
 export LIBCLANG_PATH="${LIBCLANG_PATH:-$OHOS_NDK_HOME/native/llvm/lib}"
 
@@ -116,7 +116,6 @@ export VCPKG_ROOT="${VCPKG_ROOT:-$repo_root/target/ohos-vcpkg}"
 export VCPKG_INSTALLED_ROOT="${VCPKG_INSTALLED_ROOT:-$VCPKG_ROOT/installed}"
 export OHOS_VCPKG_PREFIX="${OHOS_VCPKG_PREFIX:-$VCPKG_INSTALLED_ROOT/arm64-linux}"
 export OHOS_LIBVPX_ROOT="${OHOS_LIBVPX_ROOT:-$OHOS_VCPKG_PREFIX}"
-export OHOS_LIBAOM_ROOT="${OHOS_LIBAOM_ROOT:-$OHOS_VCPKG_PREFIX}"
 export OHOS_LIBYUV_ROOT="${OHOS_LIBYUV_ROOT:-$OHOS_VCPKG_PREFIX}"
 export OHOS_LIBOPUS_ROOT="${OHOS_LIBOPUS_ROOT:-$OHOS_VCPKG_PREFIX}"
 

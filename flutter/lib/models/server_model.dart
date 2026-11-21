@@ -182,6 +182,16 @@ class ServerModel with ChangeNotifier {
       }
 
       if (isOhos) {
+        final captureRunning = platformFFI.isOhosHostCaptureRunning;
+        if (_isStart && !captureRunning) {
+          // Capture ended outside the app (system stop button, consent cancel,
+          // or interruption): tear down the host service, continuous task and
+          // UI state to match.
+          await stopService();
+        } else if (_mediaOk != captureRunning) {
+          _mediaOk = captureRunning;
+          notifyListeners();
+        }
         // The HarmonyOS controlled side has no platform service that echoes the
         // keyboard permission back, so the option is the state the UI shows. It
         // only counts while the core holds an injection authorization; a device
@@ -533,16 +543,16 @@ class ServerModel with ChangeNotifier {
   /// Stop the screen sharing service.
   Future<void> stopService() async {
     if (isOhos) {
-      final error = await platformFFI.stopOhosHost();
-      if (error.isNotEmpty) {
-        showToast(error);
-      }
       _isStart = false;
       _mediaOk = false;
       _inputOk = false;
       closeAll();
       WakelockManager.disable(_wakelockKey);
       notifyListeners();
+      final error = await platformFFI.stopOhosHost();
+      if (error.isNotEmpty) {
+        showToast(error);
+      }
       return;
     }
     _isStart = false;

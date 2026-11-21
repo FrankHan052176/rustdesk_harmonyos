@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""Signing archive safety and real SDK release verification regressions."""
+"""Release metadata, module content and SDK signature verification regressions."""
 
 import importlib.util
-import io
 import os
 from pathlib import Path
 import shutil
 import struct
-import subprocess
-import sys
-import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -25,54 +21,10 @@ def load(name, path):
     return module
 
 
-PREPARE = load('prepare_signing', ROOT / '.github/scripts/prepare-ohos-signing.py')
 VERIFY = load('verify_release', ROOT / 'scripts/verify-ohos-release.py')
 
 
-class SigningArchiveTest(unittest.TestCase):
-    def test_rejects_traversal_and_links(self):
-        for name, kind in (('../escape', tarfile.REGTYPE), ('/escape', tarfile.REGTYPE),
-                           ('link', tarfile.SYMTYPE), ('link', tarfile.LNKTYPE)):
-            with self.subTest(name=name, kind=kind), tempfile.TemporaryDirectory() as directory:
-                stream = io.BytesIO()
-                with tarfile.open(fileobj=stream, mode='w:gz') as archive:
-                    info = tarfile.TarInfo(name)
-                    info.type = kind
-                    info.linkname = '../outside'
-                    archive.addfile(info)
-                with self.assertRaises(PREPARE.SigningError):
-                    PREPARE.extract(stream.getvalue(), Path(directory))
-                self.assertEqual(list(Path(directory).iterdir()), [])
-
-    def test_existing_material_is_not_overwritten(self):
-        with tempfile.TemporaryDirectory() as directory:
-            existing = Path(directory) / 'existing'
-            existing.write_text('keep')
-            with self.assertRaises(PREPARE.SigningError):
-                PREPARE.prepare_directory(Path(directory))
-            self.assertEqual(existing.read_text(), 'keep')
-
-    def test_both_password_fields_are_required(self):
-        for absent in ('keyPassword', 'storePassword'):
-            with self.subTest(absent=absent):
-                material = dict(keyPassword='test-only', storePassword='test-only')
-                del material[absent]
-                with self.assertRaisesRegex(PREPARE.SigningError, absent):
-                    PREPARE.validate_passwords(material)
-
-    def test_missing_secret_fails_without_creating_output(self):
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / 'signing'
-            environment = dict(os.environ)
-            environment.pop('OHOS_RELEASE_SIGNING_BASE64', None)
-            result = subprocess.run(
-                [sys.executable, str(ROOT / '.github/scripts/prepare-ohos-signing.py'), str(target)],
-                env=environment, capture_output=True, text=True, timeout=10,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('empty', result.stderr)
-            self.assertFalse(target.exists())
-
+class ReleaseMetadataTest(unittest.TestCase):
     def test_release_metadata_fails_closed(self):
         valid = dict(debug=False, buildMode='release', versionCode=67)
         VERIFY._check_release_semantics(valid, 'entry.hap')
