@@ -30,6 +30,7 @@ import 'package:flutter_hbb/models/terminal_model.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/ohos_session_window.dart';
+import 'package:flutter_hbb/utils/ohos_window_mode.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
 import 'package:tuple/tuple.dart';
 import 'package:image/image.dart' as img2;
@@ -2385,8 +2386,11 @@ class CanvasModel with ChangeNotifier {
     double w = size.width - leftToEdge - rightToEdge;
     double h = size.height - topToEdge - bottomToEdge;
     if (isMobile) {
+      final trimSafeArea = isOhos && ohosMiniWindow.value;
       // Account for horizontal safe area insets on both orientations.
-      w = w - mediaData.padding.left - mediaData.padding.right;
+      if (!trimSafeArea) {
+        w = w - mediaData.padding.left - mediaData.padding.right;
+      }
       // Vertically, subtract the bottom keyboard inset (viewInsets.bottom) and any
       // bottom overlay (e.g. key-help tools) so the canvas is not covered.
       h = h -
@@ -2397,7 +2401,7 @@ class CanvasModel with ChangeNotifier {
       //  - Portrait: additionally subtract top padding (e.g. status bar / notch)
       //  - Landscape: does not subtract mediaData.padding.top/bottom (home indicator auto-hides)
       final isPortrait = size.height > size.width;
-      if (isPortrait) {
+      if (isPortrait && !trimSafeArea) {
         // In portrait mode, subtract the top safe-area padding (e.g. status bar / notch)
         // so the remote image is not truncated, while keeping the bottom inset to avoid
         // introducing unnecessary blank space around the canvas.
@@ -2423,6 +2427,46 @@ class CanvasModel with ChangeNotifier {
   }
 
   updateSize() => _size = getSize();
+
+  /// Adapts canvas scale and offset to a viewport resize (such as entering or
+  /// leaving a HarmonyOS mini-window or rotating portrait/landscape) while
+  /// preserving the user's relative zoom ratio and focal point.
+  void rescaleForViewportChange() {
+    final oldSize = _size;
+    final newSize = getSize();
+    if (newSize == oldSize || newSize.width <= 0 || newSize.height <= 0) {
+      return;
+    }
+    final displayWidth = getDisplayWidth();
+    final displayHeight = getDisplayHeight();
+    final rescaled = rescaleCanvasForViewport(
+      oldWidth: oldSize.width,
+      oldHeight: oldSize.height,
+      newWidth: newSize.width,
+      newHeight: newSize.height,
+      displayWidth: displayWidth.toDouble(),
+      displayHeight: displayHeight.toDouble(),
+      oldScale: _scale,
+      oldX: _x,
+      oldY: _y,
+    );
+    _size = newSize;
+    if (rescaled != null) {
+      _scale = rescaled.scale;
+      _x = rescaled.x;
+      _y = rescaled.y;
+      _lastViewStyle = ViewStyle(
+        style: _lastViewStyle.style,
+        width: newSize.width,
+        height: newSize.height,
+        displayWidth: displayWidth,
+        displayHeight: displayHeight,
+      );
+      notifyListeners();
+    } else {
+      updateViewStyle();
+    }
+  }
 
   updateViewStyle({refreshMousePos = true, notify = true}) async {
     final style = await bind.sessionGetViewStyle(sessionId: sessionId);

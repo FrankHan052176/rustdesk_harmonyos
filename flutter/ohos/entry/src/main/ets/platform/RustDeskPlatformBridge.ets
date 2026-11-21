@@ -228,7 +228,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
           this.withMainWindow(result, async (mainWindow: window.Window): Promise<Object | null> => {
             this.observeWindowMode(mainWindow);
             this.observeWindowFocus(mainWindow);
-            return this.windowStatusName(mainWindow);
+            return this.windowModePayload(mainWindow);
           });
           return;
         case 'isWindowMaximized':
@@ -501,6 +501,21 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     return 'recover';
   }
 
+  private isFreeWindowMode(mainWindow: window.Window): boolean {
+    try {
+      return mainWindow.isInFreeWindowMode();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private windowModePayload(mainWindow: window.Window): Map<string, Object> {
+    const payload = new Map<string, Object>();
+    payload.set('status', this.windowStatusName(mainWindow));
+    payload.set('freeform', this.isFreeWindowMode(mainWindow));
+    return payload;
+  }
+
   /// Report window mode changes so the frontend can switch between the mobile and the
   /// desktop layout, and keep the 2in1 minimum size in place.
   private observeWindowMode(mainWindow: window.Window): void {
@@ -510,15 +525,20 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     this.windowModeObserved = true;
     try {
       mainWindow.on('windowStatusChange', (status: window.WindowStatusType) => {
-        this.channel?.invokeMethod('onWindowStatus', {
-          'status': this.windowStatusName(mainWindow),
-        });
+        this.channel?.invokeMethod('onWindowStatus', this.windowModePayload(mainWindow));
         // The caption APIs settle with the window state, so measure after the change.
         console.info(
           `RustDesk window status changed, decorHeight=${mainWindow.getWindowDecorHeight()}`);
       });
     } catch (error) {
       console.error(`RustDesk window mode listener failed: ${String(error)}`);
+    }
+    try {
+      mainWindow.on('freeWindowModeChange', (_inFreeWindowMode: boolean) => {
+        this.channel?.invokeMethod('onWindowStatus', this.windowModePayload(mainWindow));
+      });
+    } catch (error) {
+      console.error(`RustDesk free window mode listener failed: ${String(error)}`);
     }
   }
 

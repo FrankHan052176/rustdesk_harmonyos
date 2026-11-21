@@ -92,6 +92,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       buildTip(context),
       if (!isOutgoingOnly) buildIDBoard(context),
       if (!isOutgoingOnly) buildPasswordBoard(context),
+      if (isOhos && !isOutgoingOnly) const _OhosHostPanel(),
       FutureBuilder<Widget>(
         future: Future.value(
             Obx(() => buildHelpCards(stateGlobal.updateUrl.value))),
@@ -1126,4 +1127,92 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
       onCancel: close,
     );
   });
+}
+
+/// Compact controlled-side panel for HarmonyOS desktop/2in1 layout: toggles
+/// screen sharing (`startOhosHost`/`stopOhosHost`) and lists active or pending
+/// incoming clients (HarmonyOS has no separate `--cm` process window).
+class _OhosHostPanel extends StatelessWidget {
+  const _OhosHostPanel();
+
+  @override
+  Widget build(BuildContext context) {
+    final serverModel = Provider.of<ServerModel>(context);
+    final running = serverModel.isStart;
+    final clients = serverModel.clients;
+    return Container(
+      margin: const EdgeInsets.only(left: 20, right: 11, top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: running ? Colors.redAccent : MyTheme.accent,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+            ),
+            icon: Icon(
+              running ? Icons.stop_screen_share : Icons.screen_share,
+              size: 16,
+            ),
+            label: Text(
+              translate(running ? 'Stop service' : 'Start service'),
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12),
+            ),
+            onPressed: serverModel.toggleService,
+          ),
+          if (clients.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            ...clients.map((client) => Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surface,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                        color: Theme.of(context).dividerColor.withOpacity(0.5)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          client.name.isNotEmpty ? client.name : client.peerId,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                      if (!client.authorized &&
+                          serverModel.approveMode != 'password')
+                        IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                              minWidth: 24, minHeight: 24),
+                          icon: const Icon(Icons.check,
+                              size: 16, color: Colors.green),
+                          tooltip: translate('Accept'),
+                          onPressed: () =>
+                              serverModel.sendLoginResponse(client, true),
+                        ),
+                      IconButton(
+                        padding: EdgeInsets.zero,
+                        constraints:
+                            const BoxConstraints(minWidth: 24, minHeight: 24),
+                        icon: const Icon(Icons.close,
+                            size: 16, color: Colors.redAccent),
+                        tooltip: translate(
+                            client.authorized ? 'Disconnect' : 'Dismiss'),
+                        onPressed: () => client.authorized
+                            ? bind.cmCloseConnection(connId: client.id)
+                            : serverModel.sendLoginResponse(client, false),
+                      ),
+                    ],
+                  ),
+                )),
+          ],
+        ],
+      ),
+    );
+  }
 }

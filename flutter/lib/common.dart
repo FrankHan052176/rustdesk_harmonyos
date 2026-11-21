@@ -68,6 +68,9 @@ var isMobile = isAndroid || isIOS || isOhos;
 String ohosDeviceType = '';
 /// A free-form window ("自由多窗" / PC mode) uses the desktop UI even on a tablet.
 final ohosFreeformWindow = ValueNotifier<bool>(false);
+/// A phone or tablet floating mini-window ("小窗") stays on the mobile UI and
+/// trims remote-page chrome/margins so the remote display fills the window.
+final ohosMiniWindow = ValueNotifier<bool>(false);
 bool get isOhosDesktop =>
     isOhos && (ohosDeviceType == '2in1' || ohosFreeformWindow.value);
 bool get isDesktopUi => isDesktop || isOhosDesktop;

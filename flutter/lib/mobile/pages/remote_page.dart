@@ -146,6 +146,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     keyboardSubscription =
         keyboardVisibilityController.onChange.listen(onSoftKeyboardChanged);
     _mobileFocusNode.addListener(_onOhosSoftKeyboardFocusChanged);
+    if (isOhos) {
+      ohosMiniWindow.addListener(_onOhosMiniWindowChanged);
+    }
     gFFI.chatModel
         .changeCurrentKey(MessageKey(widget.id, ChatModel.clientModeID));
     _blockableOverlayState.applyFfi(gFFI);
@@ -191,6 +194,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleLocalKeyEvent);
+    if (isOhos) {
+      ohosMiniWindow.removeListener(_onOhosMiniWindowChanged);
+    }
     super.dispose();
     final closing = _disposeSession();
     OhosSessionWindow.trackDisposal(closing);
@@ -238,6 +244,33 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       trySyncClipboard();
       _disableOhosImePreviewText();
     }
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!isOhos || !mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      gFFI.canvasModel.rescaleForViewportChange();
+    });
+  }
+
+  void _onOhosMiniWindowChanged() {
+    if (!mounted) return;
+    if (ohosMiniWindow.value) {
+      if (_showEdit) {
+        _showEdit = false;
+        gFFI.invokeMethod("enable_soft_keyboard", false);
+        _mobileFocusNode.unfocus();
+        _physicalFocusNode.requestFocus();
+      }
+      _showGestureHelp = false;
+    }
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      gFFI.canvasModel.rescaleForViewportChange();
+    });
   }
 
   /// On HarmonyOS the soft-keyboard session follows the focus of its text
@@ -583,9 +616,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final miniWindow = isOhos && ohosMiniWindow.value;
     final keyboardIsVisible =
-        keyboardVisibilityController.isVisible && _showEdit;
-    final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
+        !miniWindow && keyboardVisibilityController.isVisible && _showEdit;
+    final showActionButton =
+        !miniWindow && (!_showBar || keyboardIsVisible || _showGestureHelp);
 
     return WillPopScope(
       onWillPop: () async {
@@ -622,9 +657,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       }
                     });
                   }),
-          bottomNavigationBar: Obx(() => gFFI.ffiModel.pi.isSet.isTrue
-              ? _bottomWidget()
-              : const SizedBox.shrink()),
+          bottomNavigationBar: miniWindow
+              ? const SizedBox.shrink()
+              : Obx(() => gFFI.ffiModel.pi.isSet.isTrue
+                  ? _bottomWidget()
+                  : const SizedBox.shrink()),
           body: Obx(
             () => Stack(fit: StackFit.expand, children: [
               getRawPointerAndKeyBody(Overlay(
@@ -635,14 +672,24 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       child: isWebDesktop
                           ? getBodyForDesktopWithListener()
                           : SafeArea(
+                              left: !miniWindow,
+                              top: !miniWindow,
+                              right: !miniWindow,
+                              bottom: !miniWindow,
                               child:
                                   OrientationBuilder(builder: (ctx, orientation) {
                                 if (_currentOrientation != orientation) {
                                   Timer(const Duration(milliseconds: 200), () {
+                                    if (!mounted) return;
                                     gFFI.dialogManager
                                         .resetMobileActionsOverlay(ffi: gFFI);
                                     _currentOrientation = orientation;
-                                    gFFI.canvasModel.updateViewStyle();
+                                    if (isOhos) {
+                                      gFFI.canvasModel
+                                          .rescaleForViewportChange();
+                                    } else {
+                                      gFFI.canvasModel.updateViewStyle();
+                                    }
                                   });
                                 }
                                 return Container(

@@ -16,6 +16,7 @@ import 'package:path_provider/path_provider.dart';
 import '../common.dart';
 import '../generated_bridge.dart';
 import '../utils/ohos_session_window.dart';
+import '../utils/ohos_window_mode.dart';
 
 final class RgbaFrame extends Struct {
   @Uint32()
@@ -254,7 +255,7 @@ class PlatformFFI {
                   '';
           _toOhosChannel.setMethodCallHandler(_handleOhosWindowCall);
           _applyOhosWindowStatus(
-              await _toOhosChannel.invokeMethod<String>('watchWindowStatus'));
+              await _toOhosChannel.invokeMethod<dynamic>('watchWindowStatus'));
           // A free-form window on a tablet keeps its caption as well, so every OHOS window
           // gets the same framing preparation.
           await _toOhosChannel.invokeMethod<void>('prepareWindow');
@@ -542,7 +543,7 @@ class PlatformFFI {
         await _cleanupSessionWindow();
         return true;
       case 'onWindowStatus':
-        _applyOhosWindowStatus((call.arguments as Map)['status'] as String?);
+        _applyOhosWindowStatus(call.arguments);
         return true;
       default:
         return false;
@@ -617,12 +618,29 @@ class PlatformFFI {
   }
 
   /// Applies the HarmonyOS window mode; a free-form window uses the desktop UI.
-  void _applyOhosWindowStatus(String? status) {
+  void _applyOhosWindowStatus(dynamic raw) {
     if (!isOhos) return;
-    final freeform = status == 'floating';
-    debugPrint('OHOS window mode: ${status ?? 'unknown'}, freeform=$freeform');
-    if (ohosFreeformWindow.value != freeform) {
-      ohosFreeformWindow.value = freeform;
+    String? status;
+    bool? isInFreeWindowMode;
+    if (raw is Map) {
+      status = raw['status'] as String?;
+      isInFreeWindowMode = raw['freeform'] as bool?;
+    } else if (raw is String) {
+      status = raw;
+    }
+    final mode = classifyOhosWindowMode(
+      deviceType: ohosDeviceType,
+      status: status,
+      isInFreeWindowMode: isInFreeWindowMode,
+    );
+    debugPrint(
+        'OHOS window mode: device=$ohosDeviceType status=${status ?? 'unknown'} '
+        'freeWindow=$isInFreeWindowMode -> freeform=${mode.freeform}, mini=${mode.miniWindow}');
+    if (ohosFreeformWindow.value != mode.freeform) {
+      ohosFreeformWindow.value = mode.freeform;
+    }
+    if (ohosMiniWindow.value != mode.miniWindow) {
+      ohosMiniWindow.value = mode.miniWindow;
     }
   }
 

@@ -672,7 +672,7 @@ class ServerModel with ChangeNotifier {
       }
       scrollToBottom();
       notifyListeners();
-      if (isAndroid && !client.authorized) showLoginDialog(client);
+      if ((isAndroid || isOhos) && !client.authorized) showLoginDialog(client);
       if (isAndroid) androidUpdatekeepScreenOn();
     } catch (e) {
       debugPrint("Failed to call loginRequest,error:$e");
@@ -801,6 +801,7 @@ class ServerModel with ChangeNotifier {
       tabController.remove(index);
       _clients.remove(client);
       if (isAndroid) androidUpdatekeepScreenOn();
+      notifyListeners();
     }
   }
 
