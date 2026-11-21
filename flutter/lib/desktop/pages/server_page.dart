@@ -51,13 +51,17 @@ class _DesktopServerPageState extends State<DesktopServerPage>
 
   @override
   void initState() {
-    windowManager.addListener(this);
+    if (!isOhos) {
+      windowManager.addListener(this);
+    }
     super.initState();
   }
 
   @override
   void dispose() {
-    windowManager.removeListener(this);
+    if (!isOhos) {
+      windowManager.removeListener(this);
+    }
     super.dispose();
   }
 
@@ -69,6 +73,8 @@ class _DesktopServerPageState extends State<DesktopServerPage>
     Future.wait([gFFI.serverModel.closeAll(byOperator: byOperator), gFFI.close()]).then((_) {
       if (isMacOS) {
         RdPlatformChannel.instance.terminate();
+      } else if (isOhos) {
+        platformFFI.closeWindow();
       } else {
         windowManager.setPreventClose(false);
         windowManager.close();
@@ -79,7 +85,11 @@ class _DesktopServerPageState extends State<DesktopServerPage>
 
   void onRemoveId(String id) {
     if (tabController.state.value.tabs.isEmpty) {
-      windowManager.close();
+      if (isOhos) {
+        platformFFI.closeWindow();
+      } else {
+        windowManager.close();
+      }
     }
   }
 
@@ -140,7 +150,9 @@ class ConnectionManagerState extends State<ConnectionManager>
               gFFI.chatModel.showChatPage(MessageKey(client.peerId, client.id));
             });
           }
-          windowManager.setTitle(getWindowNameWithId(client.peerId));
+          if (!isOhos) {
+            windowManager.setTitle(getWindowNameWithId(client.peerId));
+          }
           gFFI.cmFileModel.updateCurrentClientId(client.id);
         }
       }
@@ -303,7 +315,11 @@ class ConnectionManagerState extends State<ConnectionManager>
           Expanded(
             child: GestureDetector(
               onPanStart: (d) {
-                windowManager.startDragging();
+                if (isOhos) {
+                  platformFFI.startMovingWindow();
+                } else {
+                  windowManager.startDragging();
+                }
               },
               child: Container(
                 color: Theme.of(context).colorScheme.background,
@@ -339,7 +355,11 @@ class ConnectionManagerState extends State<ConnectionManager>
     final connLength = tabController.length;
     if (connLength <= 1) {
       _cmClosedByOperator = true;
-      windowManager.close();
+      if (isOhos) {
+        await platformFFI.closeWindow();
+      } else {
+        windowManager.close();
+      }
       return true;
     } else {
       final bool res;
@@ -353,7 +373,11 @@ class ConnectionManagerState extends State<ConnectionManager>
         // After the dialog, never before it: an external close while it is open must not
         // inherit an intent the user had not expressed yet.
         _cmClosedByOperator = true;
-        windowManager.close();
+        if (isOhos) {
+          await platformFFI.closeWindow();
+        } else {
+          windowManager.close();
+        }
       }
       return res;
     }
@@ -404,7 +428,11 @@ class _CloseButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return IconButton(
       onPressed: () {
-        windowManager.close();
+        if (isOhos) {
+          platformFFI.closeWindow();
+        } else {
+          windowManager.close();
+        }
       },
       icon: const Icon(
         IconFont.close,
@@ -1028,7 +1056,11 @@ class _CmControlPanel extends StatelessWidget {
             color: MyTheme.accent,
             onClick: () {
               handleElevate(context);
-              windowManager.minimize();
+              if (isOhos) {
+                platformFFI.minimizeWindow();
+              } else {
+                windowManager.minimize();
+              }
             },
             icon: Icon(
               Icons.security_rounded,
@@ -1091,7 +1123,11 @@ class _CmControlPanel extends StatelessWidget {
           child: buildButton(context, color: Colors.green[700], onClick: () {
             handleAccept(context);
             handleElevate(context);
-            windowManager.minimize();
+            if (isOhos) {
+              platformFFI.minimizeWindow();
+            } else {
+              windowManager.minimize();
+            }
           },
               text: 'Accept and Elevate',
               icon: Icon(
@@ -1114,7 +1150,11 @@ class _CmControlPanel extends StatelessWidget {
                       color: MyTheme.accent,
                       onClick: () {
                         handleAccept(context);
-                        windowManager.minimize();
+                        if (isOhos) {
+                          platformFFI.minimizeWindow();
+                        } else {
+                          windowManager.minimize();
+                        }
                       },
                       text: 'Accept',
                       textColor: Colors.white,
@@ -1217,7 +1257,11 @@ class _CmControlPanel extends StatelessWidget {
   void handleClose() async {
     await bind.cmRemoveDisconnectedConnection(connId: client.id);
     if (await bind.cmGetClientsLength() == 0) {
-      windowManager.close();
+      if (isOhos) {
+        await platformFFI.closeWindow();
+      } else {
+        windowManager.close();
+      }
     }
   }
 

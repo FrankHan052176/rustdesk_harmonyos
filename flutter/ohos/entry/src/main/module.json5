@@ -53,8 +53,8 @@
         "startWindowBackground": "$color:start_window_background",
         "launchType": "multiton",
         "orientation": "auto_rotation_restricted",
-        "minWindowWidth": 640,
-        "minWindowHeight": 480,
+        "minWindowWidth": 300,
+        "minWindowHeight": 400,
         "exported": false
       }
     ],

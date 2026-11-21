@@ -278,6 +278,8 @@ class PlatformFFI {
 
   bool get isOhosHostInputAuthorized => false;
 
+  Future<void> syncOhosHostPermissions({bool promptIfMissing = false}) async {}
+
   Future<void> setFullscreen(bool enabled) async {}
 
   Future<void> setLandscapeMultiWindow(bool enabled) async {}

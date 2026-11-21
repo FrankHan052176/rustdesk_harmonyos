@@ -45,6 +45,9 @@ class ServerModel with ChangeNotifier {
   bool _allowNumericOneTimePassword = false;
   String _approveMode = "";
   int _zeroClientLengthCounter = 0;
+  bool _ohosCmWindowOpen = false;
+  bool _ohosCmWindowOpening = false;
+  int _ohosPermPollTick = 0;
 
   late String _emptyIdShow;
   late final IDTextEditingController _serverId;
@@ -170,14 +173,20 @@ class ServerModel with ChangeNotifier {
           updateClientState(res);
         } else {
           if (_clients.isEmpty) {
-            hideCmWindow();
-            if (_zeroClientLengthCounter++ == 12) {
-              // 6 second
-              windowManager.close();
+            if (isOhos) {
+              if (_zeroClientLengthCounter++ >= 2) {
+                platformFFI.closeWindow();
+              }
+            } else {
+              hideCmWindow();
+              if (_zeroClientLengthCounter++ == 12) {
+                // 6 second
+                windowManager.close();
+              }
             }
           } else {
             _zeroClientLengthCounter = 0;
-            if (!hideCm) showCmWindow();
+            if (!isOhos && !hideCm) showCmWindow();
           }
         }
       }
@@ -192,6 +201,17 @@ class ServerModel with ChangeNotifier {
         } else if (_mediaOk != captureRunning) {
           _mediaOk = captureRunning;
           notifyListeners();
+        }
+        if (desktopType != DesktopType.cm && _clients.isEmpty) {
+          _ohosCmWindowOpen = false;
+        }
+        if (!inputControlSupported && (++_ohosPermPollTick % 4 == 0)) {
+          await platformFFI.syncOhosHostPermissions();
+        }
+        if (inputControlSupported &&
+            bind.mainGetLocalOption(key: 'ohos-keyboard-perm-migrated') != 'Y') {
+          bind.mainSetOption(key: kOptionEnableKeyboard, value: defaultOptionYes);
+          bind.mainSetLocalOption(key: 'ohos-keyboard-perm-migrated', value: 'Y');
         }
         // The HarmonyOS controlled side has no platform service that echoes the
         // keyboard permission back, so the option is the state the UI shows. It
@@ -220,12 +240,12 @@ class ServerModel with ChangeNotifier {
     }
 
     // Initial keyboard status is off on iOS; Android syncs it from InputService natively.
-    // On HarmonyOS, keep keyboard off when the OS has not granted input injection.
-    if (isIOS || (isOhos && !inputControlSupported)) {
+    if (isIOS) {
       bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
-      if (isOhos) {
-        _inputOk = false;
-      }
+    } else if (isOhos && !inputControlSupported) {
+      // Keep in-memory state off without overwriting persisted config; once
+      // CONTROL_DEVICE is granted the host becomes controllable immediately.
+      _inputOk = false;
     }
   }
 
@@ -516,6 +536,14 @@ class ServerModel with ChangeNotifier {
         _isStart = true;
         _mediaOk = platformFFI.isOhosHostCaptureRunning;
         WakelockManager.enable(_wakelockKey, isServer: true);
+        parent.target?.ffiModel
+            .updateEventListener(parent.target!.sessionId, "");
+        if (inputControlSupported &&
+            bind.mainGetLocalOption(key: 'ohos-keyboard-perm-migrated') != 'Y') {
+          bind.mainSetOption(key: kOptionEnableKeyboard, value: defaultOptionYes);
+          bind.mainSetLocalOption(key: 'ohos-keyboard-perm-migrated', value: 'Y');
+        }
+        updateClientState();
       } catch (error) {
         _isStart = false;
         _mediaOk = false;
@@ -618,7 +646,7 @@ class ServerModel with ChangeNotifier {
         debugPrint("Failed to decode clientJson '$clientJson', error $e");
       }
     }
-    if (desktopType == DesktopType.cm) {
+    if (desktopType == DesktopType.cm && !isOhos) {
       if (_clients.isEmpty) {
         hideCmWindow();
       } else if (!hideCm) {
@@ -665,16 +693,35 @@ class ServerModel with ChangeNotifier {
         _clients.removeAt(index_disconnected);
         tabController.remove(index_disconnected);
       }
-      if (desktopType == DesktopType.cm && !hideCm) {
+      if (desktopType == DesktopType.cm && !isOhos && !hideCm) {
         showCmWindow();
       }
       scrollToBottom();
       notifyListeners();
-      if ((isAndroid || isOhos) && !client.authorized) showLoginDialog(client);
+      if (isOhos && isOhosDesktop && desktopType != DesktopType.cm) {
+        _openOhosCmWindow();
+      } else if ((isAndroid || isOhos) && !client.authorized) {
+        showLoginDialog(client);
+      }
       if (isAndroid) androidUpdatekeepScreenOn();
     } catch (e) {
       debugPrint("Failed to call loginRequest,error:$e");
     }
+  }
+
+  void _openOhosCmWindow() {
+    if (_ohosCmWindowOpening || _ohosCmWindowOpen) return;
+    _ohosCmWindowOpening = true;
+    platformFFI
+        .openSessionWindow(
+          {'kind': 'cm'},
+          translate('RustDesk'),
+          width: kConnectionManagerWindowSizeClosedChat.width.toInt(),
+          height: kConnectionManagerWindowSizeClosedChat.height.toInt(),
+        )
+        .then((_) => _ohosCmWindowOpen = true)
+        .catchError((error) => debugPrint('Failed to open OHOS CM window: $error'))
+        .whenComplete(() => _ohosCmWindowOpening = false);
   }
 
   void _addTab(Client client) {
@@ -684,9 +731,11 @@ class ServerModel with ChangeNotifier {
         closable: false,
         onTap: () {},
         page: desktop.buildConnectionCard(client)));
-    Future.delayed(Duration.zero, () async {
-      if (!hideCm) windowOnTop(null);
-    });
+    if (!isOhos) {
+      Future.delayed(Duration.zero, () async {
+        if (!hideCm) windowOnTop(null);
+      });
+    }
     // Only do the hidden task when on Desktop.
     if (client.authorized && isDesktop) {
       cmHiddenTimer = Timer(const Duration(seconds: 3), () {
@@ -820,8 +869,11 @@ class ServerModel with ChangeNotifier {
         parent.target?.dialogManager.dismissByTag(getLoginDialogTag(id));
         parent.target?.invokeMethod("cancel_notification", id);
       }
-      if (desktopType == DesktopType.cm && _clients.isEmpty) {
+      if (desktopType == DesktopType.cm && !isOhos && _clients.isEmpty) {
         hideCmWindow();
+      }
+      if (isOhos && _clients.isEmpty) {
+        _ohosCmWindowOpen = false;
       }
       if (isAndroid) androidUpdatekeepScreenOn();
       notifyListeners();
@@ -864,7 +916,7 @@ class ServerModel with ChangeNotifier {
         if (client.incomingVoiceCall) {
           if (isAndroid) {
             showVoiceCallDialog(client);
-          } else {
+          } else if (!isOhos) {
             // Has incoming phone call, let's set the window on top.
             Future.delayed(Duration.zero, () {
               windowOnTop(null);

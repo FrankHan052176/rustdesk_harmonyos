@@ -34,6 +34,8 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
   private sessionLaunch: RustDeskSessionLaunch | null;
   private sessionWindowId: string;
   private sessionWindowTitle: string;
+  private sessionWindowWidth: number;
+  private sessionWindowHeight: number;
   private launchDelivered: boolean = false;
   private focusWindow: window.Window | null = null;
   private readonly onWindowEvent = (event: window.WindowEventType): void => {
@@ -49,6 +51,8 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     this.sessionLaunch = launch;
     this.sessionWindowId = launch?.windowId ?? '';
     this.sessionWindowTitle = launch?.title ?? '';
+    this.sessionWindowWidth = launch?.width ?? 0;
+    this.sessionWindowHeight = launch?.height ?? 0;
   }
 
   /// Resolves true only when the session may be torn down. A pending launch is
@@ -158,11 +162,13 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
         case 'openSessionWindow':
           const payload = (call.argument('payload') as string | null) ?? '';
           const title = (call.argument('title') as string | null) ?? '';
+          const reqWidth = (call.argument('width') as number | null) ?? 0;
+          const reqHeight = (call.argument('height') as number | null) ?? 0;
           if (this.abilityContext === null || payload.length === 0) {
             result.error('OHOS_WINDOW_UNAVAILABLE', 'A window context and session payload are required', null);
             return;
           }
-          RustDeskSessionWindows.open(this.abilityContext, payload, title)
+          RustDeskSessionWindows.open(this.abilityContext, payload, title, reqWidth, reqHeight)
             .then((windowId: string) => result.success(windowId))
             .catch(() => result.error('OHOS_WINDOW_START_FAILED', 'Unable to open a session window', null));
           return;
@@ -205,6 +211,16 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
               try {
                 await this.syncWindowCaption(mainWindow);
                 await mainWindow.setWindowTitle(this.sessionWindowTitle);
+                if (this.sessionWindowWidth > 0 && this.sessionWindowHeight > 0) {
+                  try {
+                    const density = display.getDefaultDisplaySync().densityPixels || 1;
+                    await mainWindow.resize(
+                      Math.round(this.sessionWindowWidth * density),
+                      Math.round(this.sessionWindowHeight * density),
+                    );
+                  } catch (_) {
+                  }
+                }
                 console.info(
                   `RustDesk session window prepared, decorHeight=${mainWindow.getWindowDecorHeight()}`);
               } catch (error) {

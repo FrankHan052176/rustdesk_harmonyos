@@ -270,7 +270,7 @@ class PlatformFFI {
           // A free-form window on a tablet keeps its caption as well, so every OHOS window
           // gets the same framing preparation.
           await _toOhosChannel.invokeMethod<void>('prepareWindow');
-          await _syncOhosHostPermissions();
+          await syncOhosHostPermissions();
         } else {
           // SYSTEM user failed
           _dir = (await getApplicationDocumentsDirectory()).path;
@@ -434,10 +434,13 @@ class PlatformFFI {
       _toOhosChannel
           .invokeMapMethod<String, dynamic>('getWindowLaunchPayload');
 
-  Future<void> openSessionWindow(Map<String, dynamic> payload, String title) async {
+  Future<void> openSessionWindow(Map<String, dynamic> payload, String title,
+      {int? width, int? height}) async {
     await _toOhosChannel.invokeMethod<String>('openSessionWindow', {
       'payload': jsonEncode(payload),
       'title': title,
+      if (width != null) 'width': width,
+      if (height != null) 'height': height,
     });
   }
 
@@ -570,11 +573,18 @@ class PlatformFFI {
     }
   }
 
-  Future<void> _syncOhosHostPermissions() async {
+  Future<void> syncOhosHostPermissions({bool promptIfMissing = false}) async {
     if (!isOhos) return;
     try {
-      final perms = await _toOhosChannel
+      var perms = await _toOhosChannel
           .invokeMapMethod<String, dynamic>('checkHostPermissions');
+      if (promptIfMissing &&
+          ohosDeviceType == '2in1' &&
+          (perms?['controlDevice'] != true ||
+              perms?['customScreenRecording'] != true)) {
+        perms = await _toOhosChannel
+            .invokeMapMethod<String, dynamic>('requestHostPermissionsOnSetting');
+      }
       final controlDevice = perms?['controlDevice'] == true;
       _ohosSetHostInputPermission?.call(controlDevice ? 1 : 0);
       debugPrint('OHOS host ACL permissions: $perms');
@@ -590,7 +600,7 @@ class PlatformFFI {
   /// consent dialog is a system dialog the core raises itself.
   Future<String> startOhosHost() async {
     if (!isOhos) return 'OHOS host is unavailable';
-    await _syncOhosHostPermissions();
+    await syncOhosHostPermissions(promptIfMissing: true);
     if (_ohosServerStart() != 0) {
       return 'Failed to start the HarmonyOS server';
     }

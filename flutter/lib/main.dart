@@ -195,6 +195,16 @@ Future<void> ohosSessionMain(List<String> args) async {
     if (launch == null) throw StateError('Session launch is unavailable');
     OhosSessionWindow.windowId = launch['windowId'] as String;
     final payload = jsonDecode(launch['payload'] as String) as Map<String, dynamic>;
+    if (payload['kind'] == 'cm') {
+      desktopType = DesktopType.cm;
+      await initEnv(kAppTypeConnectionManager);
+      await platformFFI.prepareSessionWindow();
+      OhosSessionWindow.registerSession('cm', () async {
+        await gFFI.serverModel.closeAll(byOperator: true);
+      });
+      runApp(App(home: const DesktopServerPage()));
+      return;
+    }
     OhosSessionWindow.connectionToken = payload['connToken'] as String?;
     await initEnv('ohos-session-${OhosSessionWindow.windowId}');
     draggablePositions.load();
