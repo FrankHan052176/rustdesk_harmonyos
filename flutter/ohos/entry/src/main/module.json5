@@ -78,6 +78,29 @@
       },
       {
         "name": "ohos.permission.GET_NETWORK_INFO"
+      },
+      {
+        "name": "ohos.permission.INPUT_MONITORING"
+      },
+      {
+        "name": "ohos.permission.CUSTOM_SCREEN_RECORDING",
+        "reason": "$string:CUSTOM_SCREEN_RECORDING_reason",
+        "usedScene": {
+          "when": "inuse",
+          "abilities": [
+            "EntryAbility"
+          ]
+        }
+      },
+      {
+        "name": "ohos.permission.CONTROL_DEVICE",
+        "reason": "$string:CONTROL_DEVICE_reason",
+        "usedScene": {
+          "when": "inuse",
+          "abilities": [
+            "EntryAbility"
+          ]
+        }
       }
     ]
   }

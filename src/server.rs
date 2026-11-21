@@ -64,12 +64,16 @@ pub const NAME: &'static str = "";
 }
 }
 
-#[cfg(any(target_os = "android", target_os = "ios", target_env = "ohos"))]
+#[cfg(any(target_os = "android", target_os = "ios"))]
 pub mod input_service {
     pub const NAME_CURSOR: &'static str = "";
     pub const NAME_POS: &'static str = "";
     pub const NAME_WINDOW_FOCUS: &'static str = "";
 }
+#[cfg(target_env = "ohos")]
+pub mod ohos_input;
+#[cfg(target_env = "ohos")]
+pub use ohos_input as input_service;
 
 mod connection;
 mod login_failure_check;
@@ -147,6 +151,10 @@ pub fn new() -> ServerPtr {
         server.add_service(Box::new(clipboard_service::new(
             clipboard_service::FILE_NAME.to_owned(),
         )));
+    }
+    #[cfg(target_env = "ohos")]
+    {
+        server.add_service(Box::new(input_service::new_pos()));
     }
     #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]
     {

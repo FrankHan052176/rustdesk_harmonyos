@@ -15,6 +15,14 @@
     {
       "name": "READ_PASTEBOARD_reason",
       "value": "允许 RustDesk Unofficial 与已授权的远程桌面会话同步剪贴板文本。"
+    },
+    {
+      "name": "CUSTOM_SCREEN_RECORDING_reason",
+      "value": "允许 RustDesk Unofficial 在开启受控端屏幕共享时免除重复隐私确认弹窗。"
+    },
+    {
+      "name": "CONTROL_DEVICE_reason",
+      "value": "允许已授权的远程控制端向本机注入鼠标、触摸与键盘输入。"
     }
   ]
 }

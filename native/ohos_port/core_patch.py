@@ -61,6 +61,7 @@ SOURCE_HASHES = {
     "src/flutter.rs": "0903ee8aa4c9743268dc9e7d86bb4567c1e82b1704028f0cd3e70f4606e613e8",
     "src/flutter_ffi.rs": "a2594fa3a08bfcc72fd4ba8a32989ef7bd884a9a40fe805c620a7ec729bd8b22",
     "src/ohos_ffi.rs": "605c3ad74e2c91500c47d10e0aca91ff161829ce62882f0ad17de11c0de6be9c",
+    "src/server.rs": "53d69eed31911440e07e5f8cc3313f892b80102d0b89128b73ff75246ed8e660",
     "src/server/connection.rs": "5bd90fb62b4c4d6660c1bc1b45a0ae034b664d17e1cf9f8de11bb17bfbf669a0",
     "src/ui_interface.rs": "0d26ed8a0826e8985184e139459d7efa92dc2ec602c1ba88d3a48e173a6c92e9",
     "src/keyboard.rs": "64357790e34d85a23a6d18f5eecb05e13e89de51b599060c7f5a6f55a03707a8",
@@ -73,8 +74,12 @@ SOURCE_HASHES = {
     "libs/scrap/src/ohos/decoder.rs": "ee3008d57db1c7e8079ebc7154204bb996662ceaac704f562cb73fa0b71eaba1",
     "libs/scrap/src/common/codec.rs": "5752208f8d792659590f7b9f50792a1070c045d1a1327759c2f80c3e0b30676b",
     "libs/scrap/src/ohos/ffi.rs": "f9205e1834e9d687c7da59b3a25f39d1f5e1a5ab3392ba8b085f3fb53caf9458",
+    "libs/scrap/src/ohos/screencap.rs": "b555671c24ac76f42e4c10f276f4a955d22d2b84aaaa60ac2595911b9938e3b5",
     "src/server/audio_service.rs": "1868a9be83c8b4b93b8c388f8374adae798b5b0d7ec6e9515019a638b68b3bc3",
 }
+COPY_FILES = (
+    "src/server/ohos_input.rs",
+)
 
 MOBILE = 'any(target_os = "android", target_os = "ios")'
 MOBILE_OHOS = 'any(target_os = "android", target_os = "ios", target_env = "ohos")'
@@ -185,11 +190,110 @@ def patch_ohos_ffi(text):
     # `flutter` adds a required InvokeUiSession method. The ArkTS handler is the
     # second implementation in this build (FlutterHandler has its own): it never
     # hosts several UI sessions, matching the ArkTS single-window controller.
-    return replace(
+    text = replace(
         text, 'impl InvokeUiSession for OhosHandler {\n',
         'impl InvokeUiSession for OhosHandler {\n'
         '    #[cfg(feature = "flutter")]\n'
         '    fn is_multi_ui_session(&self) -> bool {\n        false\n    }\n\n',
+    )
+    text = replace(
+        text,
+        'fn register_capture_state_hook() {\n'
+        '    scrap::ohos::screencap::set_on_state_change(Some(Box::new(|state| {\n'
+        '        push_event("server_capture_state", &[("state", &state.to_string())]);\n'
+        '    })));\n'
+        '}\n',
+        'fn register_capture_state_hook() {\n'
+        '    scrap::ohos::screencap::set_on_state_change(Some(Box::new(|state| {\n'
+        '        if state == 0 {\n'
+        '            crate::server::input_service::start_cursor_monitor();\n'
+        '        } else {\n'
+        '            crate::server::input_service::stop_cursor_monitor();\n'
+        '            crate::server::input_service::release_all_modifiers();\n'
+        '        }\n'
+        '        push_event("server_capture_state", &[("state", &state.to_string())]);\n'
+        '    })));\n'
+        '}\n',
+    )
+    text = replace(
+        text,
+        'pub extern "C" fn ohos_capture_stop() -> c_int {\n'
+        '    scrap::ohos::screencap::stop();\n'
+        '    push_event("server_capture_state", &[("state", "2")]);\n'
+        '    0\n'
+        '}\n',
+        'pub extern "C" fn ohos_capture_stop() -> c_int {\n'
+        '    crate::server::input_service::stop_cursor_monitor();\n'
+        '    crate::server::input_service::release_all_modifiers();\n'
+        '    scrap::ohos::screencap::stop();\n'
+        '    push_event("server_capture_state", &[("state", "2")]);\n'
+        '    0\n'
+        '}\n',
+    )
+    return replace(
+        text,
+        '#[no_mangle]\n'
+        'pub extern "C" fn ohos_capture_running() -> c_int {\n'
+        '    if scrap::ohos::screencap::is_running() {\n'
+        '        1\n'
+        '    } else {\n'
+        '        0\n'
+        '    }\n'
+        '}\n',
+        '#[no_mangle]\n'
+        'pub extern "C" fn ohos_capture_running() -> c_int {\n'
+        '    if scrap::ohos::screencap::is_running() {\n'
+        '        1\n'
+        '    } else {\n'
+        '        0\n'
+        '    }\n'
+        '}\n\n'
+        '/// Reports whether this process can inject host input (2 = AUTHORIZED, 0 = UNAUTHORIZED).\n'
+        '#[no_mangle]\n'
+        'pub extern "C" fn ohos_flutter_host_input_status() -> c_int {\n'
+        '    crate::server::input_service::host_input_status()\n'
+        '}\n\n'
+        '/// Updates the runtime `ohos.permission.CONTROL_DEVICE` grant state from ArkTS.\n'
+        '#[no_mangle]\n'
+        'pub extern "C" fn ohos_flutter_set_host_input_permission(granted: c_int) -> c_int {\n'
+        '    crate::server::input_service::set_control_device_granted(granted != 0);\n'
+        '    crate::server::input_service::host_input_status()\n'
+        '}\n',
+    )
+
+
+def patch_server(text):
+    text = replace(
+        text,
+        '#[cfg(any(target_os = "android", target_os = "ios", target_env = "ohos"))]\n'
+        'pub mod input_service {\n'
+        '    pub const NAME_CURSOR: &\'static str = "";\n'
+        '    pub const NAME_POS: &\'static str = "";\n'
+        '    pub const NAME_WINDOW_FOCUS: &\'static str = "";\n'
+        '}\n',
+        '#[cfg(any(target_os = "android", target_os = "ios"))]\n'
+        'pub mod input_service {\n'
+        '    pub const NAME_CURSOR: &\'static str = "";\n'
+        '    pub const NAME_POS: &\'static str = "";\n'
+        '    pub const NAME_WINDOW_FOCUS: &\'static str = "";\n'
+        '}\n'
+        '#[cfg(target_env = "ohos")]\n'
+        'pub mod ohos_input;\n'
+        '#[cfg(target_env = "ohos")]\n'
+        'pub use ohos_input as input_service;\n',
+    )
+    return replace(
+        text,
+        '    #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]\n'
+        '    {\n'
+        '        if !display_service::capture_cursor_embedded() {\n',
+        '    #[cfg(target_env = "ohos")]\n'
+        '    {\n'
+        '        server.add_service(Box::new(input_service::new_pos()));\n'
+        '    }\n'
+        '    #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]\n'
+        '    {\n'
+        '        if !display_service::capture_cursor_embedded() {\n',
     )
 
 
@@ -197,7 +301,7 @@ def patch_server_connection(text):
     # With `flutter` the CM UI is in-process, so the Flutter channel replaces the
     # ArkTS one; keeping both imports would be a duplicate `start_channel`. The
     # call site is already gated on android/ios/ohos.
-    return replace(
+    text = replace(
         text,
         MOBILE_CFG + '\nuse crate::{common::DEVICE_NAME, flutter::connection_manager::start_channel};\n'
         '#[cfg(target_env = "ohos")]\n'
@@ -206,6 +310,133 @@ def patch_server_connection(text):
         'use crate::{common::DEVICE_NAME, flutter::connection_manager::start_channel};\n'
         '#[cfg(all(target_env = "ohos", not(feature = "flutter")))]\n'
         'use crate::{common::DEVICE_NAME, ohos_ffi::connection_manager::start_channel};',
+    )
+    text = replace(
+        text,
+        '        #[cfg(target_env = "ohos")]\n'
+        '        {\n'
+        '            // Input injection needs the system-restricted INJECT_EVENT permission\n'
+        '            // a third-party HarmonyOS app cannot get, so a controlled OHOS peer is\n'
+        '            // view-only for now (file transfer / clipboard / audio stay available).\n'
+        '            conn.keyboard = false;\n'
+        '        }\n',
+        '        #[cfg(target_env = "ohos")]\n'
+        '        {\n'
+        '            if !crate::server::input_service::is_ohos_input_authorized() {\n'
+        '                conn.keyboard = false;\n'
+        '            }\n'
+        '        }\n',
+    )
+    text = replace(
+        text,
+        '                    #[cfg(any(target_os = "android", target_os = "ios"))]\n'
+        '                    if let Err(e) = call_main_service_pointer_input("mouse", me.mask, me.x, me.y) {\n'
+        '                        log::debug!("call_main_service_pointer_input fail:{}", e);\n'
+        '                    }\n',
+        '                    #[cfg(any(target_os = "android", target_os = "ios"))]\n'
+        '                    if let Err(e) = call_main_service_pointer_input("mouse", me.mask, me.x, me.y) {\n'
+        '                        log::debug!("call_main_service_pointer_input fail:{}", e);\n'
+        '                    }\n'
+        '                    #[cfg(target_env = "ohos")]\n'
+        '                    if self.peer_keyboard_enabled() {\n'
+        '                        crate::server::input_service::handle_mouse(&me, self.inner.id());\n'
+        '                    }\n',
+    )
+    text = replace(
+        text,
+        '                    #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]\n'
+        '                    if self.peer_keyboard_enabled() {\n'
+        '                        MOUSE_MOVE_TIME.store(get_time(), Ordering::SeqCst);\n'
+        '                        self.input_pointer(pde, self.inner.id());\n'
+        '                    }\n',
+        '                    #[cfg(target_env = "ohos")]\n'
+        '                    if self.peer_keyboard_enabled() {\n'
+        '                        crate::server::input_service::handle_pointer(&pde, self.inner.id());\n'
+        '                    }\n'
+        '                    #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]\n'
+        '                    if self.peer_keyboard_enabled() {\n'
+        '                        MOUSE_MOVE_TIME.store(get_time(), Ordering::SeqCst);\n'
+        '                        self.input_pointer(pde, self.inner.id());\n'
+        '                    }\n',
+    )
+    text = replace(
+        text,
+        '                #[cfg(any(target_os = "ios"))]\n'
+        '                Some(message::Union::KeyEvent(..)) => {}\n',
+        '                #[cfg(any(target_os = "ios"))]\n'
+        '                Some(message::Union::KeyEvent(..)) => {}\n'
+        '                #[cfg(target_env = "ohos")]\n'
+        '                Some(message::Union::KeyEvent(me)) => {\n'
+        '                    if !self.is_authed_view_camera_conn() && self.peer_keyboard_enabled() {\n'
+        '                        crate::server::input_service::handle_key(&me);\n'
+        '                    }\n'
+        '                    self.update_auto_disconnect_timer();\n'
+        '                }\n',
+    )
+    text = replace(
+        text,
+        '        #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]\n'
+        '        if let Ok(q) = o.show_remote_cursor.enum_value() {\n',
+        '        #[cfg(target_env = "ohos")]\n'
+        '        if let Ok(q) = o.show_remote_cursor.enum_value() {\n'
+        '            if q != BoolOption::NotSet {\n'
+        '                self.show_remote_cursor = q == BoolOption::Yes;\n'
+        '                if let Some(s) = self.server.upgrade() {\n'
+        '                    s.write().unwrap().subscribe(\n'
+        '                        NAME_POS,\n'
+        '                        self.inner.clone(),\n'
+        '                        self.show_remote_cursor,\n'
+        '                    );\n'
+        '                }\n'
+        '            }\n'
+        '        }\n'
+        '        #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]\n'
+        '        if let Ok(q) = o.show_remote_cursor.enum_value() {\n',
+    )
+    return replace(
+        text,
+        '        crate::audio_service::set_voice_call_input_device(None, true);\n'
+        '        log::info!("#{} Connection closed: {}", self.inner.id(), reason);\n',
+        '        #[cfg(target_env = "ohos")]\n'
+        '        crate::server::input_service::release_all_modifiers();\n'
+        '        crate::audio_service::set_voice_call_input_device(None, true);\n'
+        '        log::info!("#{} Connection closed: {}", self.inner.id(), reason);\n',
+    )
+
+
+def patch_ohos_screencap(text):
+    text = replace(
+        text,
+        '    fn OH_AVScreenCapture_SetDataCallback(\n'
+        '        capture: *mut OH_AVScreenCapture,\n'
+        '        callback: OH_AVScreenCapture_OnBufferAvailable,\n'
+        '        userData: *mut c_void,\n'
+        '    ) -> c_int;\n'
+        '}\n',
+        '    fn OH_AVScreenCapture_SetDataCallback(\n'
+        '        capture: *mut OH_AVScreenCapture,\n'
+        '        callback: OH_AVScreenCapture_OnBufferAvailable,\n'
+        '        userData: *mut c_void,\n'
+        '    ) -> c_int;\n'
+        '    fn OH_AVScreenCapture_ShowCursor(\n'
+        '        capture: *mut OH_AVScreenCapture,\n'
+        '        showCursor: bool,\n'
+        '    ) -> c_int;\n'
+        '}\n',
+    )
+    return replace(
+        text,
+        '        let err = OH_AVScreenCapture_Init(capture, config);\n'
+        '        if err != AV_SCREEN_CAPTURE_ERR_OK {\n'
+        '            OH_AVScreenCapture_Release(capture);\n'
+        '            return Err(format!("Init failed: {err}"));\n'
+        '        }\n',
+        '        let err = OH_AVScreenCapture_Init(capture, config);\n'
+        '        if err != AV_SCREEN_CAPTURE_ERR_OK {\n'
+        '            OH_AVScreenCapture_Release(capture);\n'
+        '            return Err(format!("Init failed: {err}"));\n'
+        '        }\n'
+        '        let _ = OH_AVScreenCapture_ShowCursor(capture, true);\n',
     )
 
 
@@ -626,6 +857,7 @@ PATCHES = {
     "src/flutter.rs": patch_flutter,
     "src/flutter_ffi.rs": patch_flutter_ffi,
     "src/ohos_ffi.rs": patch_ohos_ffi,
+    "src/server.rs": patch_server,
     "src/server/connection.rs": patch_server_connection,
     "src/ui_interface.rs": patch_ui_interface,
     "src/keyboard.rs": patch_keyboard,
@@ -638,6 +870,7 @@ PATCHES = {
     "libs/scrap/src/ohos/decoder.rs": patch_ohos_decoder,
     "libs/scrap/src/common/codec.rs": patch_scrap_codec,
     "libs/scrap/src/ohos/ffi.rs": patch_ohos_ffi_channel,
+    "libs/scrap/src/ohos/screencap.rs": patch_ohos_screencap,
     "src/server/audio_service.rs": patch_audio_service,
 }
 
@@ -685,7 +918,7 @@ def publish(path, before, after):
     current = path.read_bytes() if path.exists() else None
     if path.is_symlink() or current != before:
         raise ValueError(f"file changed after preflight: {path}")
-    mode = path.stat().st_mode & 0o777
+    mode = (path.stat().st_mode & 0o777) if path.exists() else 0o644
     fd, temporary = tempfile.mkstemp(prefix=path.name + '.ohos-', dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as stream:
@@ -735,6 +968,19 @@ def main():
                 f"unknown worktree source: {relative}, SHA256={sha256(current)}")
         state = 'already applied' if current == patched else 'would update'
         changes.append((relative, path, current, patched, state))
+
+    repo_root = Path(__file__).resolve().parents[2]
+    for relative in COPY_FILES:
+        src_path = checked_path(repo_root, relative)
+        patched = src_path.read_bytes()
+        dst_path = root
+        for component in Path(relative).parts:
+            dst_path = dst_path / component
+            if dst_path.is_symlink():
+                raise ValueError(f"refusing symlink: {dst_path}")
+        current = dst_path.read_bytes() if dst_path.exists() else None
+        state = 'already applied' if current == patched else 'would update'
+        changes.append((relative, dst_path, current, patched, state))
 
     # No writes have happened unless every source and every patch anchor passed.
     for relative, path, current, patched, state in changes:

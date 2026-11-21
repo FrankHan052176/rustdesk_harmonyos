@@ -45,6 +45,8 @@ typedef _OhosCaptureRunningC = Int32 Function();
 typedef _OhosCaptureRunningDart = int Function();
 typedef _OhosHostInputStatusC = Int32 Function();
 typedef _OhosHostInputStatusDart = int Function();
+typedef _OhosSetHostInputPermissionC = Int32 Function(Int32);
+typedef _OhosSetHostInputPermissionDart = int Function(int);
 
 /// `ohos_flutter_host_input_status` reports this once the OS granted injection.
 const int ohosHostInputAuthorized = 2;
@@ -100,6 +102,7 @@ class PlatformFFI {
   late final _OhosCaptureStopDart _ohosCaptureStop;
   late final _OhosCaptureRunningDart _ohosCaptureRunning;
   _OhosHostInputStatusDart? _ohosHostInputStatus;
+  _OhosSetHostInputPermissionDart? _ohosSetHostInputPermission;
 
   /// Whether the OpenHarmony core is capturing the screen for the controlled side.
   ///
@@ -244,6 +247,14 @@ class PlatformFFI {
           // A core without the injection ABI cannot inject input at all.
           _ohosHostInputStatus = null;
         }
+        try {
+          _ohosSetHostInputPermission = dylib.lookupFunction<
+                  _OhosSetHostInputPermissionC,
+                  _OhosSetHostInputPermissionDart>(
+              "ohos_flutter_set_host_input_permission");
+        } on ArgumentError {
+          _ohosSetHostInputPermission = null;
+        }
       }
       try {
         if (isOhos) {
@@ -259,6 +270,7 @@ class PlatformFFI {
           // A free-form window on a tablet keeps its caption as well, so every OHOS window
           // gets the same framing preparation.
           await _toOhosChannel.invokeMethod<void>('prepareWindow');
+          await _syncOhosHostPermissions();
         } else {
           // SYSTEM user failed
           _dir = (await getApplicationDocumentsDirectory()).path;
@@ -558,6 +570,19 @@ class PlatformFFI {
     }
   }
 
+  Future<void> _syncOhosHostPermissions() async {
+    if (!isOhos) return;
+    try {
+      final perms = await _toOhosChannel
+          .invokeMapMethod<String, dynamic>('checkHostPermissions');
+      final controlDevice = perms?['controlDevice'] == true;
+      _ohosSetHostInputPermission?.call(controlDevice ? 1 : 0);
+      debugPrint('OHOS host ACL permissions: $perms');
+    } catch (error) {
+      debugPrint('OHOS host permission check failed: $error');
+    }
+  }
+
   /// Starts the controlled side through the OpenHarmony core's own C ABI, in
   /// the order its ArkTS app uses: the rendezvous mediator first, then the
   /// continuous task, then screen capture at the display size, and only after a
@@ -565,6 +590,7 @@ class PlatformFFI {
   /// consent dialog is a system dialog the core raises itself.
   Future<String> startOhosHost() async {
     if (!isOhos) return 'OHOS host is unavailable';
+    await _syncOhosHostPermissions();
     if (_ohosServerStart() != 0) {
       return 'Failed to start the HarmonyOS server';
     }

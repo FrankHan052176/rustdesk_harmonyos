@@ -1,4 +1,4 @@
-import { common, Context, wantAgent, WantAgent } from '@kit.AbilityKit';
+import { abilityAccessCtrl, bundleManager, common, Context, Permissions, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { audio } from '@kit.AudioKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
@@ -293,6 +293,14 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
             return null;
           });
           return;
+        case 'checkHostPermissions':
+          result.success(this.checkHostPermissions());
+          return;
+        case 'requestHostPermissionsOnSetting':
+          this.requestHostPermissionsOnSetting()
+            .then((status: Map<string, boolean>) => result.success(status))
+            .catch((error: Error) => result.error('OHOS_PERMISSION_ERROR', this.errorMessage(error), null));
+          return;
         case 'disableImePreviewText':
           disableImePreviewText()
             .then(() => result.success(null))
@@ -435,6 +443,48 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     }
     await backgroundTaskManager.stopBackgroundRunning(context, taskId);
     this.continuousTaskId = null;
+  }
+
+  private hasSelfPermission(permission: Permissions): boolean {
+    try {
+      const bundleInfo = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION);
+      const tokenId = bundleInfo.appInfo.accessTokenId;
+      const status = abilityAccessCtrl.createAtManager().checkAccessTokenSync(tokenId, permission);
+      return status === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  private checkHostPermissions(): Map<string, boolean> {
+    const status = new Map<string, boolean>();
+    status.set('controlDevice', this.hasSelfPermission('ohos.permission.CONTROL_DEVICE'));
+    status.set('customScreenRecording', this.hasSelfPermission('ohos.permission.CUSTOM_SCREEN_RECORDING'));
+    status.set('inputMonitoring', this.hasSelfPermission('ohos.permission.INPUT_MONITORING'));
+    return status;
+  }
+
+  private async requestHostPermissionsOnSetting(): Promise<Map<string, boolean>> {
+    const context = this.abilityContext;
+    if (context === null || deviceInfo.deviceType !== '2in1') {
+      return this.checkHostPermissions();
+    }
+    const missing: Array<Permissions> = [];
+    if (!this.hasSelfPermission('ohos.permission.CONTROL_DEVICE')) {
+      missing.push('ohos.permission.CONTROL_DEVICE');
+    }
+    if (!this.hasSelfPermission('ohos.permission.CUSTOM_SCREEN_RECORDING')) {
+      missing.push('ohos.permission.CUSTOM_SCREEN_RECORDING');
+    }
+    if (missing.length > 0) {
+      try {
+        await abilityAccessCtrl.createAtManager().requestPermissionOnSetting(context, missing);
+      } catch (error) {
+        console.error(`RustDesk host permission setting request failed: ${this.errorMessage(error as Object)}`);
+      }
+    }
+    return this.checkHostPermissions();
   }
 
   private usesCustomDesktopTitleBar(

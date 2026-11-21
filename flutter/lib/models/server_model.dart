@@ -219,16 +219,13 @@ class ServerModel with ChangeNotifier {
       });
     }
 
-    // Initial keyboard status is off on iOS and on HarmonyOS phones/tablets;
-    // Android syncs it from InputService natively.
-    if (isIOS || (isOhos && ohosDeviceType != '2in1')) {
+    // Initial keyboard status is off on iOS; Android syncs it from InputService natively.
+    // On HarmonyOS, keep keyboard off when the OS has not granted input injection.
+    if (isIOS || (isOhos && !inputControlSupported)) {
       bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
-    }
-    // Without an OS injection authorization no client input can reach this
-    // device, so the stored permission must not stay on for the next one.
-    if (isOhos && !inputControlSupported) {
-      bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
-      _inputOk = false;
+      if (isOhos) {
+        _inputOk = false;
+      }
     }
   }
 

@@ -15,6 +15,14 @@
     {
       "name": "READ_PASTEBOARD_reason",
       "value": "Allow RustDesk Unofficial to synchronize clipboard text with authorized remote desktop sessions."
+    },
+    {
+      "name": "CUSTOM_SCREEN_RECORDING_reason",
+      "value": "Allow RustDesk Unofficial to start controlled-side screen sharing without repeated privacy alerts."
+    },
+    {
+      "name": "CONTROL_DEVICE_reason",
+      "value": "Allow authorized remote controllers to inject mouse, touch, and keyboard input on this device."
     }
   ]
 }

@@ -677,10 +677,9 @@ impl Connection {
         };
         #[cfg(target_env = "ohos")]
         {
-            // Input injection needs the system-restricted INJECT_EVENT permission
-            // a third-party HarmonyOS app cannot get, so a controlled OHOS peer is
-            // view-only for now (file transfer / clipboard / audio stay available).
-            conn.keyboard = false;
+            if !crate::server::input_service::is_ohos_input_authorized() {
+                conn.keyboard = false;
+            }
         }
         let addr = hbb_common::try_into_v4(addr);
         if !conn.on_open(addr).await {
@@ -3254,6 +3253,10 @@ impl Connection {
                     if let Err(e) = call_main_service_pointer_input("mouse", me.mask, me.x, me.y) {
                         log::debug!("call_main_service_pointer_input fail:{}", e);
                     }
+                    #[cfg(target_env = "ohos")]
+                    if self.peer_keyboard_enabled() {
+                        crate::server::input_service::handle_mouse(&me, self.inner.id());
+                    }
                     #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]
                     if self.peer_keyboard_enabled() {
                         if is_left_up(&me) {
@@ -3322,6 +3325,10 @@ impl Connection {
                     } {
                         log::debug!("call_main_service_pointer_input fail:{}", e);
                     }
+                    #[cfg(target_env = "ohos")]
+                    if self.peer_keyboard_enabled() {
+                        crate::server::input_service::handle_pointer(&pde, self.inner.id());
+                    }
                     #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]
                     if self.peer_keyboard_enabled() {
                         MOUSE_MOVE_TIME.store(get_time(), Ordering::SeqCst);
@@ -3331,6 +3338,13 @@ impl Connection {
                 }
                 #[cfg(any(target_os = "ios"))]
                 Some(message::Union::KeyEvent(..)) => {}
+                #[cfg(target_env = "ohos")]
+                Some(message::Union::KeyEvent(me)) => {
+                    if !self.is_authed_view_camera_conn() && self.peer_keyboard_enabled() {
+                        crate::server::input_service::handle_key(&me);
+                    }
+                    self.update_auto_disconnect_timer();
+                }
                 #[cfg(any(target_os = "android"))]
                 Some(message::Union::KeyEvent(mut me)) => {
                     if self.is_authed_view_camera_conn() {
@@ -5067,6 +5081,19 @@ impl Connection {
                 self.lock_after_session_end = q == BoolOption::Yes;
             }
         }
+        #[cfg(target_env = "ohos")]
+        if let Ok(q) = o.show_remote_cursor.enum_value() {
+            if q != BoolOption::NotSet {
+                self.show_remote_cursor = q == BoolOption::Yes;
+                if let Some(s) = self.server.upgrade() {
+                    s.write().unwrap().subscribe(
+                        NAME_POS,
+                        self.inner.clone(),
+                        self.show_remote_cursor,
+                    );
+                }
+            }
+        }
         #[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]
         if let Ok(q) = o.show_remote_cursor.enum_value() {
             if q != BoolOption::NotSet {
@@ -5426,6 +5453,8 @@ impl Connection {
         //
         // We can add a (Vec<conn_id>, input device) to avoid this.
         // But it's not necessary now and we have to consider two audio services(client, server).
+        #[cfg(target_env = "ohos")]
+        crate::server::input_service::release_all_modifiers();
         crate::audio_service::set_voice_call_input_device(None, true);
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock

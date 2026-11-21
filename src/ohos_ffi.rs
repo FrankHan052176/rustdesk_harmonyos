@@ -1309,6 +1309,12 @@ pub fn cm_write_clipboard(clipboards: &MultiClipboards) {
 
 fn register_capture_state_hook() {
     scrap::ohos::screencap::set_on_state_change(Some(Box::new(|state| {
+        if state == 0 {
+            crate::server::input_service::start_cursor_monitor();
+        } else {
+            crate::server::input_service::stop_cursor_monitor();
+            crate::server::input_service::release_all_modifiers();
+        }
         push_event("server_capture_state", &[("state", &state.to_string())]);
     })));
 }
@@ -1498,6 +1504,8 @@ pub extern "C" fn ohos_capture_start(width: c_int, height: c_int) -> c_int {
 
 #[no_mangle]
 pub extern "C" fn ohos_capture_stop() -> c_int {
+    crate::server::input_service::stop_cursor_monitor();
+    crate::server::input_service::release_all_modifiers();
     scrap::ohos::screencap::stop();
     push_event("server_capture_state", &[("state", "2")]);
     0
@@ -1520,4 +1528,17 @@ pub extern "C" fn ohos_capture_running() -> c_int {
     } else {
         0
     }
+}
+
+/// Reports whether this process can inject host input (2 = AUTHORIZED, 0 = UNAUTHORIZED).
+#[no_mangle]
+pub extern "C" fn ohos_flutter_host_input_status() -> c_int {
+    crate::server::input_service::host_input_status()
+}
+
+/// Updates the runtime `ohos.permission.CONTROL_DEVICE` grant state from ArkTS.
+#[no_mangle]
+pub extern "C" fn ohos_flutter_set_host_input_permission(granted: c_int) -> c_int {
+    crate::server::input_service::set_control_device_granted(granted != 0);
+    crate::server::input_service::host_input_status()
 }

@@ -18,6 +18,7 @@ BUILD_INPUTS = (
     "native/ohos_port/source.lock.json",
     "native/ohos_port/core_patch.py",
     "native/ohos_port/flutter_video.py",
+    "src/server/ohos_input.rs",
     "scripts/build-ohos-port-core.sh",
     "scripts/build-libsodium-ohos.sh",
     "scripts/build-openssl-ohos.py",

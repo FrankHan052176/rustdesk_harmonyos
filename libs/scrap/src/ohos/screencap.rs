@@ -273,6 +273,10 @@ extern "C" {
         callback: OH_AVScreenCapture_OnBufferAvailable,
         userData: *mut c_void,
     ) -> c_int;
+    fn OH_AVScreenCapture_ShowCursor(
+        capture: *mut OH_AVScreenCapture,
+        showCursor: bool,
+    ) -> c_int;
 }
 
 #[link(name = "native_media_core")]
@@ -395,6 +399,7 @@ pub fn start(width: i32, height: i32) -> Result<(), String> {
             OH_AVScreenCapture_Release(capture);
             return Err(format!("Init failed: {err}"));
         }
+        let _ = OH_AVScreenCapture_ShowCursor(capture, true);
         *guard = Some(Capture {
             capture,
             width,

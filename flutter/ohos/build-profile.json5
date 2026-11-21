@@ -6,13 +6,13 @@
         "name": "default",
         "compatibleSdkVersion": "6.1.0(23)",
         "runtimeOS": "HarmonyOS",
-        "targetSdkVersion": "6.1.0(23)"
+        "targetSdkVersion": "26.0.0"
       },
       {
         "name": "publish",
         "compatibleSdkVersion": "6.1.0(23)",
         "runtimeOS": "HarmonyOS",
-        "targetSdkVersion": "6.1.0(23)"
+        "targetSdkVersion": "26.0.0"
       }
     ],
     "buildModeSet": [
