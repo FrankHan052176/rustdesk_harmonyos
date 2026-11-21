@@ -114,6 +114,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     this.stopObservingWindowFocus();
     this.landscapeMultiWindowEnabled = false;
     this.windowDecorHidden = false;
+    this.cancelCaptionRetry();
     this.keyboardVisibility?.stop();
     this.keyboardVisibility = null;
     this.sessionLaunch = null;
@@ -436,27 +437,52 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     this.continuousTaskId = null;
   }
 
-  private usesCustomDesktopTitleBar(mainWindow: window.Window): boolean {
+  private usesCustomDesktopTitleBar(
+    mainWindow: window.Window,
+    freeWindowOverride?: boolean,
+  ): boolean {
     if (deviceInfo.deviceType === '2in1' || this.sessionWindowId.length > 0) {
       return true;
     }
-    return deviceInfo.deviceType !== 'phone' && this.isFreeWindowMode(mainWindow);
+    const inFreeWindow = freeWindowOverride ?? this.isFreeWindowMode(mainWindow);
+    return deviceInfo.deviceType !== 'phone' && inFreeWindow;
   }
 
   /// Keeps the system window decoration bar hidden whenever the Flutter desktop
   /// layout owns the title bar (2in1, session windows, and tablet free-multi-window
   /// / PC mode), and restores it if a tablet returns to non-freeform mobile mode.
-  private async syncWindowCaption(mainWindow: window.Window): Promise<void> {
-    if (this.usesCustomDesktopTitleBar(mainWindow)) {
+  private async syncWindowCaption(
+    mainWindow: window.Window,
+    freeWindowOverride?: boolean,
+  ): Promise<void> {
+    if (this.usesCustomDesktopTitleBar(mainWindow, freeWindowOverride)) {
       await this.hideWindowCaption(mainWindow);
       this.windowDecorHidden = true;
       return;
     }
+    this.cancelCaptionRetry();
     if (!this.windowDecorHidden) {
       return;
     }
     await this.restoreWindowCaption(mainWindow);
     this.windowDecorHidden = false;
+  }
+
+  private scheduleCaptionRetry(mainWindow: window.Window): void {
+    this.cancelCaptionRetry();
+    this.captionRetryTimer = setTimeout(() => {
+      this.captionRetryTimer = -1;
+      if (this.usesCustomDesktopTitleBar(mainWindow)) {
+        this.hideWindowCaption(mainWindow);
+      }
+    }, 150);
+  }
+
+  private cancelCaptionRetry(): void {
+    if (this.captionRetryTimer >= 0) {
+      clearTimeout(this.captionRetryTimer);
+      this.captionRetryTimer = -1;
+    }
   }
 
   /// Asks the system to drop the window caption so the app can draw its own title bar.
@@ -548,6 +574,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
   private immersiveObserved: boolean = false;
   private landscapeMultiWindowEnabled: boolean = false;
   private windowDecorHidden: boolean = false;
+  private captionRetryTimer: number = -1;
 
   /// Switches HarmonyOS floating/split multi-window orientation for the main
   /// window (requires `preferMultiWindowOrientation: "landscape_auto"` in
@@ -597,10 +624,13 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     }
   }
 
-  private windowModePayload(mainWindow: window.Window): Map<string, Object> {
+  private windowModePayload(
+    mainWindow: window.Window,
+    freeWindowOverride?: boolean,
+  ): Map<string, Object> {
     const payload = new Map<string, Object>();
     payload.set('status', this.windowStatusName(mainWindow));
-    payload.set('freeform', this.isFreeWindowMode(mainWindow));
+    payload.set('freeform', freeWindowOverride ?? this.isFreeWindowMode(mainWindow));
     return payload;
   }
 
@@ -614,6 +644,9 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     try {
       mainWindow.on('windowStatusChange', (status: window.WindowStatusType) => {
         this.syncWindowCaption(mainWindow);
+        if (this.usesCustomDesktopTitleBar(mainWindow)) {
+          this.scheduleCaptionRetry(mainWindow);
+        }
         this.channel?.invokeMethod('onWindowStatus', this.windowModePayload(mainWindow));
         // The caption APIs settle with the window state, so measure after the change.
         console.info(
@@ -632,9 +665,14 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
       console.error(`RustDesk window status did-change listener failed: ${String(error)}`);
     }
     try {
-      mainWindow.on('freeWindowModeChange', (_inFreeWindowMode: boolean) => {
-        this.syncWindowCaption(mainWindow);
-        this.channel?.invokeMethod('onWindowStatus', this.windowModePayload(mainWindow));
+      mainWindow.on('freeWindowModeChange', (inFreeWindowMode: boolean) => {
+        // Hot-switching a tablet into free-multi-window may mount the system
+        // caption bar a frame after the event; apply now and once more after settle.
+        this.syncWindowCaption(mainWindow, inFreeWindowMode);
+        if (inFreeWindowMode && deviceInfo.deviceType !== 'phone') {
+          this.scheduleCaptionRetry(mainWindow);
+        }
+        this.channel?.invokeMethod('onWindowStatus', this.windowModePayload(mainWindow, inFreeWindowMode));
       });
     } catch (error) {
       console.error(`RustDesk free window mode listener failed: ${String(error)}`);

@@ -709,7 +709,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         systemError = error;
         setState(() {});
       }
-      final v = await mainGetBoolOption(kOptionStopService);
+      final v = isOhos
+          ? !gFFI.serverModel.isStart
+          : await mainGetBoolOption(kOptionStopService);
       if (v != svcStopped.value) {
         svcStopped.value = v;
         setState(() {});
@@ -751,6 +753,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         }
       }
     });
+    if (isOhos) {
+      svcStopped.value = !gFFI.serverModel.isStart;
+    }
     Get.put<RxBool>(svcStopped, tag: 'stop-service');
     rustDeskWinManager.registerActiveWindowListener(onActiveWindowChanged);
 
@@ -1129,42 +1134,25 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
   });
 }
 
-/// Compact controlled-side panel for HarmonyOS desktop/2in1 layout: toggles
-/// screen sharing (`startOhosHost`/`stopOhosHost`) and lists active or pending
-/// incoming clients (HarmonyOS has no separate `--cm` process window).
+/// Compact incoming-client list for HarmonyOS desktop/2in1 layout (HarmonyOS
+/// has no separate `--cm` process window). Service start/stop stays on the
+/// standard bottom status bar and settings page.
 class _OhosHostPanel extends StatelessWidget {
   const _OhosHostPanel();
 
   @override
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
-    final running = serverModel.isStart;
     final clients = serverModel.clients;
+    if (clients.isEmpty) {
+      return const SizedBox.shrink();
+    }
     return Container(
       margin: const EdgeInsets.only(left: 20, right: 11, top: 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: running ? Colors.redAccent : MyTheme.accent,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-            ),
-            icon: Icon(
-              running ? Icons.stop_screen_share : Icons.screen_share,
-              size: 16,
-            ),
-            label: Text(
-              translate(running ? 'Stop service' : 'Start service'),
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12),
-            ),
-            onPressed: serverModel.toggleService,
-          ),
-          if (clients.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            ...clients.map((client) => Container(
+        children: clients
+            .map((client) => Container(
                   margin: const EdgeInsets.only(bottom: 6),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -1209,9 +1197,8 @@ class _OhosHostPanel extends StatelessWidget {
                       ),
                     ],
                   ),
-                )),
-          ],
-        ],
+                ))
+            .toList(),
       ),
     );
   }

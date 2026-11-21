@@ -3243,6 +3243,9 @@ Future<void> start_service(bool is_start) async {
     } else {
       await gFFI.serverModel.stopService();
     }
+    if (Get.isRegistered<RxBool>(tag: 'stop-service')) {
+      Get.find<RxBool>(tag: 'stop-service').value = !gFFI.serverModel.isStart;
+    }
     return;
   }
   bool checked = !bind.mainIsInstalled() ||
