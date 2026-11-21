@@ -30,9 +30,10 @@ class ServerModel with ChangeNotifier {
   bool _mediaOk = false;
   bool _inputOk = false;
 
-  /// Whether this device can intercept input at all. Honest by construction:
-  /// only an OS injection authorization the core actually holds counts.
-  bool get inputControlSupported => platformFFI.isOhosHostInputAuthorized;
+  /// Whether this device can intercept input at all. Non-OHOS platforms keep
+  /// upstream behavior; on OHOS only an OS injection authorization counts.
+  bool get inputControlSupported =>
+      !isOhos || platformFFI.isOhosHostInputAuthorized;
   bool _audioOk = false;
   bool _fileOk = false;
   bool _clipboardOk = false;

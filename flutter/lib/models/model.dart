@@ -4227,7 +4227,9 @@ class FFI {
   }) async {
     if (isOhos && _closeFuture != null) await _closeFuture;
     _closeFuture = null;
-    OhosSessionWindow.registerSession(sessionId.toString(), () => close());
+    if (isOhos) {
+      OhosSessionWindow.registerSession(sessionId.toString(), () => close());
+    }
     closed = false;
     if (isMobile) mobileReset();
     assert(
@@ -4527,7 +4529,7 @@ class FFI {
     inputModel.disposeRelativeMouseMode();
     inputModel.disposeSideButtonTracking();
     await nativeClosed;
-    if (OhosSessionWindow.isSession) {
+    if (isOhos && OhosSessionWindow.isSession) {
       // The pushed session route never pops itself, so a closed session must take its
       // HarmonyOS window with it instead of leaving a black rectangle behind. The session
       // teardown is already running here, hence the terminate-only call.

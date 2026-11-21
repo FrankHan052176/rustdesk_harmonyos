@@ -150,8 +150,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     gFFI.qualityMonitorModel.checkShowQualityMonitor(sessionId);
     keyboardSubscription =
         keyboardVisibilityController.onChange.listen(onSoftKeyboardChanged);
-    _mobileFocusNode.addListener(_onOhosSoftKeyboardFocusChanged);
     if (isOhos) {
+      _mobileFocusNode.addListener(_onOhosSoftKeyboardFocusChanged);
       ohosMiniWindow.addListener(_onOhosMiniWindowChanged);
       gFFI.ffiModel.addListener(_syncOhosLandscapeMultiWindow);
       gFFI.canvasModel.addListener(_syncOhosLandscapeMultiWindow);
@@ -203,14 +203,19 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleLocalKeyEvent);
     if (isOhos) {
+      _mobileFocusNode.removeListener(_onOhosSoftKeyboardFocusChanged);
       ohosMiniWindow.removeListener(_onOhosMiniWindowChanged);
       gFFI.ffiModel.removeListener(_syncOhosLandscapeMultiWindow);
       gFFI.canvasModel.removeListener(_syncOhosLandscapeMultiWindow);
       unawaited(platformFFI.setLandscapeMultiWindow(false));
+    } else {
+      unawaited(bind.sessionClose(sessionId: sessionId));
     }
     super.dispose();
     final closing = _disposeSession();
-    OhosSessionWindow.trackDisposal(closing);
+    if (isOhos) {
+      OhosSessionWindow.trackDisposal(closing);
+    }
     unawaited(closing);
   }
 

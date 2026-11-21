@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/animated_rotation_widget.dart';
 import 'package:flutter_hbb/common/widgets/custom_password.dart';
+import 'package:flutter_hbb/common/widgets/ohos_host_panel.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
@@ -92,7 +93,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       buildTip(context),
       if (!isOutgoingOnly) buildIDBoard(context),
       if (!isOutgoingOnly) buildPasswordBoard(context),
-      if (isOhos && !isOutgoingOnly) const _OhosHostPanel(),
+      if (isOhos && !isOutgoingOnly) const OhosHostClientList(),
       FutureBuilder<Widget>(
         future: Future.value(
             Obx(() => buildHelpCards(stateGlobal.updateUrl.value))),
@@ -1132,74 +1133,4 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
       onCancel: close,
     );
   });
-}
-
-/// Compact incoming-client list for HarmonyOS desktop/2in1 layout (HarmonyOS
-/// has no separate `--cm` process window). Service start/stop stays on the
-/// standard bottom status bar and settings page.
-class _OhosHostPanel extends StatelessWidget {
-  const _OhosHostPanel();
-
-  @override
-  Widget build(BuildContext context) {
-    final serverModel = Provider.of<ServerModel>(context);
-    final clients = serverModel.clients;
-    if (clients.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    return Container(
-      margin: const EdgeInsets.only(left: 20, right: 11, top: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: clients
-            .map((client) => Container(
-                  margin: const EdgeInsets.only(bottom: 6),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.surface,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                        color: Theme.of(context).dividerColor.withOpacity(0.5)),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          client.name.isNotEmpty ? client.name : client.peerId,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
-                      if (!client.authorized &&
-                          serverModel.approveMode != 'password')
-                        IconButton(
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                              minWidth: 24, minHeight: 24),
-                          icon: const Icon(Icons.check,
-                              size: 16, color: Colors.green),
-                          tooltip: translate('Accept'),
-                          onPressed: () =>
-                              serverModel.sendLoginResponse(client, true),
-                        ),
-                      IconButton(
-                        padding: EdgeInsets.zero,
-                        constraints:
-                            const BoxConstraints(minWidth: 24, minHeight: 24),
-                        icon: const Icon(Icons.close,
-                            size: 16, color: Colors.redAccent),
-                        tooltip: translate(
-                            client.authorized ? 'Disconnect' : 'Dismiss'),
-                        onPressed: () => client.authorized
-                            ? bind.cmCloseConnection(connId: client.id)
-                            : serverModel.sendLoginResponse(client, false),
-                      ),
-                    ],
-                  ),
-                ))
-            .toList(),
-      ),
-    );
-  }
 }
