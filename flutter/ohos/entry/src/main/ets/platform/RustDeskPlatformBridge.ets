@@ -113,6 +113,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
   onDetachedFromEngine(binding: FlutterPluginBinding): void {
     this.stopObservingWindowFocus();
     this.landscapeMultiWindowEnabled = false;
+    this.windowDecorHidden = false;
     this.keyboardVisibility?.stop();
     this.keyboardVisibility = null;
     this.sessionLaunch = null;
@@ -201,7 +202,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
             if (this.sessionWindowId.length > 0) {
               // The session window draws its own title bar, exactly like the main window.
               try {
-                await this.hideWindowCaption(mainWindow);
+                await this.syncWindowCaption(mainWindow);
                 await mainWindow.setWindowTitle(this.sessionWindowTitle);
                 console.info(
                   `RustDesk session window prepared, decorHeight=${mainWindow.getWindowDecorHeight()}`);
@@ -212,7 +213,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
               return null;
             }
             try {
-              await this.hideWindowCaption(mainWindow);
+              await this.syncWindowCaption(mainWindow);
               console.info(
                 `RustDesk main window prepared, decorHeight=${mainWindow.getWindowDecorHeight()}`);
             } catch (error) {
@@ -279,6 +280,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
               if (this.isMaximized(mainWindow)) {
                 await mainWindow.recover();
               }
+              await this.syncWindowCaption(mainWindow);
             }
             return null;
           });
@@ -434,15 +436,68 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     this.continuousTaskId = null;
   }
 
+  private usesCustomDesktopTitleBar(mainWindow: window.Window): boolean {
+    if (deviceInfo.deviceType === '2in1' || this.sessionWindowId.length > 0) {
+      return true;
+    }
+    return deviceInfo.deviceType !== 'phone' && this.isFreeWindowMode(mainWindow);
+  }
+
+  /// Keeps the system window decoration bar hidden whenever the Flutter desktop
+  /// layout owns the title bar (2in1, session windows, and tablet free-multi-window
+  /// / PC mode), and restores it if a tablet returns to non-freeform mobile mode.
+  private async syncWindowCaption(mainWindow: window.Window): Promise<void> {
+    if (this.usesCustomDesktopTitleBar(mainWindow)) {
+      await this.hideWindowCaption(mainWindow);
+      this.windowDecorHidden = true;
+      return;
+    }
+    if (!this.windowDecorHidden) {
+      return;
+    }
+    await this.restoreWindowCaption(mainWindow);
+    this.windowDecorHidden = false;
+  }
+
   /// Asks the system to drop the window caption so the app can draw its own title bar.
-  ///
-  /// Measured on a 2in1 emulator and on a tablet: the caption stays at 37px no matter what
-  /// this calls, so the app keeps the platform caption and must not maximize the window to
-  /// try to get rid of it (that would also leave the free-form layout).
   private async hideWindowCaption(mainWindow: window.Window): Promise<void> {
-    await mainWindow.setWindowDecorVisible(false);
-    mainWindow.setWindowTitleButtonVisible(false, false, false);
-    mainWindow.setWindowTitleMoveEnabled(false);
+    try {
+      mainWindow.setWindowDecorVisible(false);
+    } catch (error) {
+      console.error(`RustDesk hide window decor failed: ${this.errorMessage(error as Object)}`);
+    }
+    try {
+      mainWindow.setWindowTitleButtonVisible(false, false, false);
+    } catch (_) {
+    }
+    try {
+      mainWindow.setWindowTitleMoveEnabled(false);
+    } catch (_) {
+    }
+    try {
+      await mainWindow.setTitleAndDockHoverShown(false, false);
+    } catch (_) {
+    }
+  }
+
+  private async restoreWindowCaption(mainWindow: window.Window): Promise<void> {
+    try {
+      mainWindow.setWindowDecorVisible(true);
+    } catch (error) {
+      console.error(`RustDesk restore window decor failed: ${this.errorMessage(error as Object)}`);
+    }
+    try {
+      mainWindow.setWindowTitleButtonVisible(true, true, true);
+    } catch (_) {
+    }
+    try {
+      mainWindow.setWindowTitleMoveEnabled(true);
+    } catch (_) {
+    }
+    try {
+      await mainWindow.setTitleAndDockHoverShown(true, true);
+    } catch (_) {
+    }
   }
 
   private isMaximized(mainWindow: window.Window): boolean {
@@ -492,6 +547,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
   private immersiveRequested: boolean = false;
   private immersiveObserved: boolean = false;
   private landscapeMultiWindowEnabled: boolean = false;
+  private windowDecorHidden: boolean = false;
 
   /// Switches HarmonyOS floating/split multi-window orientation for the main
   /// window (requires `preferMultiWindowOrientation: "landscape_auto"` in
@@ -557,6 +613,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     this.windowModeObserved = true;
     try {
       mainWindow.on('windowStatusChange', (status: window.WindowStatusType) => {
+        this.syncWindowCaption(mainWindow);
         this.channel?.invokeMethod('onWindowStatus', this.windowModePayload(mainWindow));
         // The caption APIs settle with the window state, so measure after the change.
         console.info(
@@ -566,7 +623,17 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
       console.error(`RustDesk window mode listener failed: ${String(error)}`);
     }
     try {
+      mainWindow.on('windowStatusDidChange', (_status: window.WindowStatusType) => {
+        // Re-apply after SceneBoard finishes the transition (e.g. recover/maximize -> floating).
+        this.syncWindowCaption(mainWindow);
+        this.channel?.invokeMethod('onWindowStatus', this.windowModePayload(mainWindow));
+      });
+    } catch (error) {
+      console.error(`RustDesk window status did-change listener failed: ${String(error)}`);
+    }
+    try {
       mainWindow.on('freeWindowModeChange', (_inFreeWindowMode: boolean) => {
+        this.syncWindowCaption(mainWindow);
         this.channel?.invokeMethod('onWindowStatus', this.windowModePayload(mainWindow));
       });
     } catch (error) {

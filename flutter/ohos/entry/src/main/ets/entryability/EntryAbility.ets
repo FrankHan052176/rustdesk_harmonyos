@@ -8,13 +8,13 @@ import RustDeskPlatformBridge from '../platform/RustDeskPlatformBridge';
 export default class EntryAbility extends FlutterAbility {
   onWindowStageCreate(windowStage: window.WindowStage): void {
     super.onWindowStageCreate(windowStage);
-    if (deviceInfo.deviceType !== '2in1') {
-      return;
-    }
     try {
       const mainWindow = windowStage.getMainWindowSync();
-      mainWindow.setWindowDecorVisible(false);
-      mainWindow.setWindowTitleMoveEnabled(false);
+      const freeform = deviceInfo.deviceType !== 'phone' && mainWindow.isInFreeWindowMode();
+      if (deviceInfo.deviceType === '2in1' || freeform) {
+        mainWindow.setWindowDecorVisible(false);
+        mainWindow.setWindowTitleMoveEnabled(false);
+      }
     } catch (error) {
       console.error(`Failed to configure the RustDesk Flutter window: ${error}`);
     }
