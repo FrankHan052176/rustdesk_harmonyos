@@ -70,6 +70,8 @@ SOURCE_HASHES = {
     "src/ipc.rs": "85326032ebc7514ea3da4a480f5acd79b078dc186656b80b9ae91054f84497a0",
     "src/lang.rs": "aa5be8539fc87a329653ce10d8b1e9ed79dc1e54dc7559b1eae16558fdd0568f",
     "libs/scrap/src/ohos/ohcodec.rs": "0bb6fd055f4db1ca465c29a8a31429a4c6ab02408ddc9eb33af079fd3af087b2",
+    "libs/scrap/src/ohos/decoder.rs": "ee3008d57db1c7e8079ebc7154204bb996662ceaac704f562cb73fa0b71eaba1",
+    "libs/scrap/src/common/codec.rs": "5752208f8d792659590f7b9f50792a1070c045d1a1327759c2f80c3e0b30676b",
 }
 
 MOBILE = 'any(target_os = "android", target_os = "ios")'
@@ -379,6 +381,76 @@ def patch_ohcodec(text):
     )
 
 
+def patch_ohos_decoder(text):
+    # A freshly reset buffer-mode OhCodecDecoder receiving a mid-stream P-frame
+    # times out after BUFFER_WAIT (100ms) and returns Ok(false). Treat that wait
+    # as pending output up to SURFACE_STALL (3s) so client.rs does not instantly
+    # mark H.265/H.264 unsupported before the next keyframe arrives.
+    text = replace(
+        text,
+        '    pub fn is_surface_mode(&self) -> bool {\n'
+        '        !self.cleanup.window.is_null()\n'
+        '    }\n',
+        '    pub fn is_surface_mode(&self) -> bool {\n'
+        '        !self.cleanup.window.is_null()\n'
+        '    }\n\n'
+        '    pub fn is_pending_output(&self) -> bool {\n'
+        '        self.is_surface_mode() || self.pending_since.is_some()\n'
+        '    }\n',
+    )
+    text = replace(
+        text,
+        '                let now = Instant::now();\n'
+        '                if now >= deadline {\n'
+        '                    return Ok(false);\n'
+        '                }\n',
+        '                let now = Instant::now();\n'
+        '                if now >= deadline {\n'
+        '                    let pending_since = self.pending_since.get_or_insert_with(Instant::now);\n'
+        '                    if pending_since.elapsed() >= SURFACE_STALL {\n'
+        '                        bail!("ohcodec buffer output stalled");\n'
+        '                    }\n'
+        '                    return Ok(false);\n'
+        '                }\n',
+    )
+    return replace(
+        text,
+        '        };\n'
+        '        let converted = copy_output(output.buffer, output.format, rgb);\n',
+        '        };\n'
+        '        self.pending_since = None;\n'
+        '        let converted = copy_output(output.buffer, output.format, rgb);\n',
+    )
+
+
+def patch_scrap_codec(text):
+    return replace(
+        text,
+        '    #[cfg(target_env = "ohos")]\n'
+        '    pub fn pending_surface_output(&self) -> bool {\n'
+        '        self.h264_ohcodec\n'
+        '            .as_ref()\n'
+        '            .map(|decoder| decoder.is_surface_mode())\n'
+        '            .unwrap_or_else(|| {\n'
+        '                self.h265_ohcodec\n'
+        '                    .as_ref()\n'
+        '                    .is_some_and(|decoder| decoder.is_surface_mode())\n'
+        '            })\n'
+        '    }\n',
+        '    #[cfg(target_env = "ohos")]\n'
+        '    pub fn pending_surface_output(&self) -> bool {\n'
+        '        self.h264_ohcodec\n'
+        '            .as_ref()\n'
+        '            .map(|decoder| decoder.is_pending_output())\n'
+        '            .unwrap_or_else(|| {\n'
+        '                self.h265_ohcodec\n'
+        '                    .as_ref()\n'
+        '                    .is_some_and(|decoder| decoder.is_pending_output())\n'
+        '            })\n'
+        '    }\n',
+    )
+
+
 PATCHES = {
     "src/flutter.rs": patch_flutter,
     "src/flutter_ffi.rs": patch_flutter_ffi,
@@ -392,6 +464,8 @@ PATCHES = {
     "src/ipc.rs": patch_ipc,
     "src/lang.rs": patch_lang,
     "libs/scrap/src/ohos/ohcodec.rs": patch_ohcodec,
+    "libs/scrap/src/ohos/decoder.rs": patch_ohos_decoder,
+    "libs/scrap/src/common/codec.rs": patch_scrap_codec,
 }
 
 

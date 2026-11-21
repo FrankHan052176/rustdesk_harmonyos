@@ -346,6 +346,10 @@ impl OhCodecDecoder {
         !self.cleanup.window.is_null()
     }
 
+    pub fn is_pending_output(&self) -> bool {
+        self.is_surface_mode() || self.pending_since.is_some()
+    }
+
     pub fn target_is_current(&self) -> bool {
         match self.surface_generation {
             Some(generation) => direct_render::current_surface()
@@ -453,6 +457,10 @@ impl OhCodecDecoder {
                 }
                 let now = Instant::now();
                 if now >= deadline {
+                    let pending_since = self.pending_since.get_or_insert_with(Instant::now);
+                    if pending_since.elapsed() >= SURFACE_STALL {
+                        bail!("ohcodec buffer output stalled");
+                    }
                     return Ok(false);
                 }
                 shared = inner
@@ -462,6 +470,7 @@ impl OhCodecDecoder {
                     .0;
             }
         };
+        self.pending_since = None;
         let converted = copy_output(output.buffer, output.format, rgb);
         let rc = unsafe { OH_VideoDecoder_FreeOutputBuffer(inner.codec, output.index) };
         if rc != AV_ERR_OK && converted.is_ok() {

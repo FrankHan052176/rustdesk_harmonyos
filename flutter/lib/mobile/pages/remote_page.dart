@@ -96,6 +96,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool _showGestureHelp = false;
   String _value = '';
   Orientation? _currentOrientation;
+  Size? _lastOhosWindowSize;
   final _uniqueKey = UniqueKey();
   Timer? _iosKeyboardWorkaroundTimer;
 
@@ -134,6 +135,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       forceRelay: widget.forceRelay,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (isOhos && mounted) {
+        _lastOhosWindowSize = MediaQuery.maybeOf(context)?.size;
+      }
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       gFFI.dialogManager
           .showLoading(translate('Connecting...'), onCancel: closeConnection);
@@ -251,6 +255,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (!isOhos || !mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // Only rescale when the window itself resizes (mini-window / rotation /
+      // split-screen). Soft-keyboard inset changes are owned by
+      // saveMobileOffsetBeforeSoftKeyboard / restoreMobileOffsetAfterSoftKeyboard;
+      // rescaling on keyboard insets shifts the canvas before the pre-keyboard
+      // offset is saved and leaves the picture stuck upward after dismissal.
+      final windowSize = MediaQuery.maybeOf(context)?.size;
+      if (windowSize == null || windowSize == _lastOhosWindowSize) {
+        return;
+      }
+      _lastOhosWindowSize = windowSize;
       gFFI.canvasModel.rescaleForViewportChange();
     });
   }
@@ -269,6 +283,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     setState(() {});
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _lastOhosWindowSize = MediaQuery.maybeOf(context)?.size;
       gFFI.canvasModel.rescaleForViewportChange();
     });
   }

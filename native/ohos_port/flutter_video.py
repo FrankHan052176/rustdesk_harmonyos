@@ -208,14 +208,16 @@ impl Drop for OhosVideoLifetime {
                         if let Some(handler) = video_handler.as_mut() {
                             handler.reset(None);
                         }
+                        #[cfg(all(target_env = "ohos", feature = "flutter"))]
+                        session.refresh_video(display as _);
                     }
                     #[cfg(all(target_env = "ohos", feature = "flutter"))]
                     MediaData::OhosReset(done) => {
-                        if let Some(handler) = video_handler.as_mut() {
-                            handler.reset(None);
-                        }
-                        // Reset replaces the decoder and runs the old decoder's
-                        // cleanup before acknowledging Flutter's texture owner.
+                        // Drop the Surface decoder before acknowledging Flutter's
+                        // texture owner instead of creating a buffer decoder mid-detach
+                        // (which would fail on a stray P-frame during teardown/pause).
+                        video_handler = None;
+                        session.refresh_video(display as _);
                         let _ = done.send(());
                     }
 ''')

@@ -879,7 +879,7 @@ Future<List<TRadioMenu<String>>> toolbarCodec(
   final sessionId = ffi.sessionId;
   final alternativeCodecs =
       await bind.sessionAlternativeCodecs(sessionId: sessionId);
-  final groupValue = await bind.sessionGetOption(
+  final rawGroupValue = await bind.sessionGetOption(
           sessionId: sessionId, arg: kOptionCodecPreference) ??
       '';
   final List<bool> codecs = [];
@@ -902,6 +902,16 @@ Future<List<TRadioMenu<String>>> toolbarCodec(
     return _registerRadioMenuShortcuts<String>(ffi, [],
         ownedActionIds: _kToolbarCodecActionIds);
   }
+  final availableValues = <String>{
+    'auto',
+    'vp9',
+    if (codecs[0]) 'vp8',
+    if (codecs[1]) 'av1',
+    if (codecs[2]) 'h264',
+    if (codecs[3]) 'h265',
+  };
+  final groupValue =
+      availableValues.contains(rawGroupValue) ? rawGroupValue : 'auto';
   onChanged(String? value) async {
     if (value == null) return;
     await bind.sessionPeerOption(

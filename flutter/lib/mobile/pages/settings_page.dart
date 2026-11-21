@@ -1039,7 +1039,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             !outgoingOnly &&
             !hideSecuritySettings)
           SettingsSection(title: Text('2FA'), tiles: tfaTiles),
-        if (isAndroid &&
+        if ((isAndroid || isOhos) &&
             !disabledSettings &&
             !outgoingOnly &&
             !hideSecuritySettings)

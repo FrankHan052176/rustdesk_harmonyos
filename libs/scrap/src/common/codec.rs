@@ -709,11 +709,11 @@ impl Decoder {
     pub fn pending_surface_output(&self) -> bool {
         self.h264_ohcodec
             .as_ref()
-            .map(|decoder| decoder.is_surface_mode())
+            .map(|decoder| decoder.is_pending_output())
             .unwrap_or_else(|| {
                 self.h265_ohcodec
                     .as_ref()
-                    .is_some_and(|decoder| decoder.is_surface_mode())
+                    .is_some_and(|decoder| decoder.is_pending_output())
             })
     }
 
