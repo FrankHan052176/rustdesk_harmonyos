@@ -329,9 +329,10 @@ mod pa_impl {
                     send_f32(&batch, &mut encoder, &sp);
                 }
                 if !got {
-                    // The capturer callback paces at 20 ms; poll close to it so
-                    // the call does not accumulate 100 ms batches.
-                    hbb_common::sleep(if ohos_mic.is_some() { 0.02 } else { 0.1 }).await;
+                    // Both AVScreenCapture and the OHAudio call mic deliver 20 ms
+                    // buffers; poll at 10 ms so audio streams continuously without
+                    // 100 ms stalls or buffer drops.
+                    hbb_common::sleep(0.01).await;
                 }
             }
         }
@@ -851,7 +852,7 @@ fn send_f32(data: &[f32], encoder: &mut AudioEncoder, sp: &GenericService) {
         }
     }
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(not(any(target_os = "android", target_env = "ohos")))]
     match encoder.encoder.encode_vec_float(data, data.len() * 6) {
         Ok(data) => {
             let mut msg_out = Message::new();

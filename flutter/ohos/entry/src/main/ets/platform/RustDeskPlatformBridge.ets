@@ -112,6 +112,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
 
   onDetachedFromEngine(binding: FlutterPluginBinding): void {
     this.stopObservingWindowFocus();
+    this.landscapeMultiWindowEnabled = false;
     this.keyboardVisibility?.stop();
     this.keyboardVisibility = null;
     this.sessionLaunch = null;
@@ -279,6 +280,13 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
                 await mainWindow.recover();
               }
             }
+            return null;
+          });
+          return;
+        case 'setLandscapeMultiWindow':
+          this.withMainWindow(result, async (mainWindow: window.Window): Promise<Object | null> => {
+            const enabled = (call.argument('enabled') as boolean | null) ?? false;
+            await this.setLandscapeMultiWindow(mainWindow, enabled);
             return null;
           });
           return;
@@ -483,6 +491,30 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
 
   private immersiveRequested: boolean = false;
   private immersiveObserved: boolean = false;
+  private landscapeMultiWindowEnabled: boolean = false;
+
+  /// Switches HarmonyOS floating/split multi-window orientation for the main
+  /// window (requires `preferMultiWindowOrientation: "landscape_auto"` in
+  /// module.json5). Ignored on 2in1 PC devices and secondary session windows.
+  private async setLandscapeMultiWindow(mainWindow: window.Window, enabled: boolean): Promise<void> {
+    if (deviceInfo.deviceType === '2in1' || this.sessionWindowId.length > 0) {
+      return;
+    }
+    if (this.landscapeMultiWindowEnabled === enabled) {
+      return;
+    }
+    try {
+      if (enabled) {
+        await mainWindow.enableLandscapeMultiWindow();
+      } else {
+        await mainWindow.disableLandscapeMultiWindow();
+      }
+      this.landscapeMultiWindowEnabled = enabled;
+      console.info(`RustDesk landscape multi-window ${enabled ? 'enabled' : 'disabled'}`);
+    } catch (error) {
+      console.error(`RustDesk landscape multi-window update failed: ${this.errorMessage(error as Object)}`);
+    }
+  }
 
   private windowStatusName(mainWindow: window.Window): string {
     const status = mainWindow.getWindowStatus();

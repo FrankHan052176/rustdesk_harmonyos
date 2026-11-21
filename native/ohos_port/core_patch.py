@@ -72,6 +72,8 @@ SOURCE_HASHES = {
     "libs/scrap/src/ohos/ohcodec.rs": "0bb6fd055f4db1ca465c29a8a31429a4c6ab02408ddc9eb33af079fd3af087b2",
     "libs/scrap/src/ohos/decoder.rs": "ee3008d57db1c7e8079ebc7154204bb996662ceaac704f562cb73fa0b71eaba1",
     "libs/scrap/src/common/codec.rs": "5752208f8d792659590f7b9f50792a1070c045d1a1327759c2f80c3e0b30676b",
+    "libs/scrap/src/ohos/ffi.rs": "f9205e1834e9d687c7da59b3a25f39d1f5e1a5ab3392ba8b085f3fb53caf9458",
+    "src/server/audio_service.rs": "1868a9be83c8b4b93b8c388f8374adae798b5b0d7ec6e9515019a638b68b3bc3",
 }
 
 MOBILE = 'any(target_os = "android", target_os = "ios")'
@@ -451,6 +453,175 @@ def patch_scrap_codec(text):
     )
 
 
+def patch_ohos_ffi_channel(text):
+    # AVScreenCapture delivers continuous 20 ms stereo s16le PCM buffers.
+    # Storing them in single-slot FrameRaw overwrote every buffer that arrived
+    # between consumer polls, making controlled-side audio choppy. Use a
+    # bounded 4-byte-aligned FIFO queue for audio while keeping FrameRaw for
+    # latest-frame video.
+    text = replace(
+        text,
+        'use lazy_static::lazy_static;\nuse std::ops::Not;\n',
+        'use lazy_static::lazy_static;\nuse std::collections::VecDeque;\nuse std::ops::Not;\n',
+    )
+    text = replace(
+        text,
+        '    static ref AUDIO_RAW_INNER: Mutex<FrameRaw> =\n'
+        '        Mutex::new(FrameRaw::new("audio-inner", MAX_AUDIO_FRAME_TIMEOUT));\n'
+        '    static ref AUDIO_RAW_MIC: Mutex<FrameRaw> =\n'
+        '        Mutex::new(FrameRaw::new("audio-mic", MAX_AUDIO_FRAME_TIMEOUT));\n',
+        '    static ref AUDIO_RAW_INNER: Mutex<AudioQueue> =\n'
+        '        Mutex::new(AudioQueue::new("audio-inner", MAX_AUDIO_FRAME_TIMEOUT));\n'
+        '    static ref AUDIO_RAW_MIC: Mutex<AudioQueue> =\n'
+        '        Mutex::new(AudioQueue::new("audio-mic", MAX_AUDIO_FRAME_TIMEOUT));\n',
+    )
+    text = replace(
+        text,
+        'const MAX_VIDEO_FRAME_TIMEOUT: Duration = Duration::from_millis(100);\n'
+        'const MAX_AUDIO_FRAME_TIMEOUT: Duration = Duration::from_millis(1000);\n',
+        'const MAX_VIDEO_FRAME_TIMEOUT: Duration = Duration::from_millis(100);\n'
+        'const MAX_AUDIO_FRAME_TIMEOUT: Duration = Duration::from_millis(1000);\n'
+        '// 240 ms of 48 kHz stereo s16le PCM (4-byte stereo-frame aligned).\n'
+        'const MAX_AUDIO_QUEUE_BYTES: usize = 3840 * 12;\n',
+    )
+    text = replace(
+        text,
+        'pub fn set_video_raw_enable(enable: bool) {\n',
+        'struct AudioQueue {\n'
+        '    name: &\'static str,\n'
+        '    buf: VecDeque<u8>,\n'
+        '    last_update: Instant,\n'
+        '    last_taken: Instant,\n'
+        '    timeout: Duration,\n'
+        '    enable: bool,\n'
+        '}\n'
+        '\n'
+        'impl AudioQueue {\n'
+        '    fn new(name: &\'static str, timeout: Duration) -> Self {\n'
+        '        AudioQueue {\n'
+        '            name,\n'
+        '            buf: VecDeque::new(),\n'
+        '            last_update: Instant::now(),\n'
+        '            last_taken: Instant::now(),\n'
+        '            timeout,\n'
+        '            enable: false,\n'
+        '        }\n'
+        '    }\n'
+        '\n'
+        '    fn set_enable(&mut self, value: bool) {\n'
+        '        self.enable = value;\n'
+        '        self.buf.clear();\n'
+        '    }\n'
+        '\n'
+        '    fn push(&mut self, data: &[u8]) {\n'
+        '        if self.enable.not() || self.last_taken.elapsed() > UNCONSUMED_SKIP || data.is_empty() {\n'
+        '            return;\n'
+        '        }\n'
+        '        if data.len() >= MAX_AUDIO_QUEUE_BYTES {\n'
+        '            self.buf.clear();\n'
+        '            let drop_head = ((data.len() - MAX_AUDIO_QUEUE_BYTES + 3) / 4) * 4;\n'
+        '            if drop_head < data.len() {\n'
+        '                self.buf.extend(&data[drop_head..]);\n'
+        '            }\n'
+        '        } else {\n'
+        '            let total = self.buf.len() + data.len();\n'
+        '            if total > MAX_AUDIO_QUEUE_BYTES {\n'
+        '                let overflow = total - MAX_AUDIO_QUEUE_BYTES;\n'
+        '                let drop_bytes = ((overflow + 3) / 4) * 4;\n'
+        '                let actual_drop = drop_bytes.min(self.buf.len());\n'
+        '                self.buf.drain(..actual_drop);\n'
+        '            }\n'
+        '            self.buf.extend(data);\n'
+        '        }\n'
+        '        self.last_update = Instant::now();\n'
+        '    }\n'
+        '\n'
+        '    fn take(&mut self, dst: &mut Vec<u8>) -> Option<()> {\n'
+        '        self.last_taken = Instant::now();\n'
+        '        if self.enable.not() || self.buf.is_empty() {\n'
+        '            return None;\n'
+        '        }\n'
+        '        if self.last_update.elapsed() > self.timeout {\n'
+        '            log::trace!("Failed to take {} raw,timeout!", self.name);\n'
+        '            self.buf.clear();\n'
+        '            return None;\n'
+        '        }\n'
+        '        dst.clear();\n'
+        '        dst.reserve(self.buf.len());\n'
+        '        let (front, back) = self.buf.as_slices();\n'
+        '        dst.extend_from_slice(front);\n'
+        '        dst.extend_from_slice(back);\n'
+        '        self.buf.clear();\n'
+        '        Some(())\n'
+        '    }\n'
+        '}\n'
+        '\n'
+        'pub fn set_video_raw_enable(enable: bool) {\n',
+    )
+    text = replace(
+        text,
+        'pub fn push_audio_frame(data: &[u8], mic: bool) {\n'
+        '    if mic {\n'
+        '        AUDIO_RAW_MIC.lock().unwrap().update(data);\n'
+        '    } else {\n'
+        '        AUDIO_RAW_INNER.lock().unwrap().update(data);\n'
+        '    }\n'
+        '}\n',
+        'pub fn push_audio_frame(data: &[u8], mic: bool) {\n'
+        '    if mic {\n'
+        '        AUDIO_RAW_MIC.lock().unwrap().push(data);\n'
+        '    } else {\n'
+        '        AUDIO_RAW_INNER.lock().unwrap().push(data);\n'
+        '    }\n'
+        '}\n',
+    )
+    return replace(
+        text,
+        'pub fn get_audio_raw(dst: &mut Vec<u8>, last: &mut Vec<u8>, mic: bool) -> Option<()> {\n'
+        '    if mic {\n'
+        '        AUDIO_RAW_MIC.lock().ok()?.take(dst, last)\n'
+        '    } else {\n'
+        '        AUDIO_RAW_INNER.lock().ok()?.take(dst, last)\n'
+        '    }\n'
+        '}\n',
+        'pub fn get_audio_raw(dst: &mut Vec<u8>, _last: &mut Vec<u8>, mic: bool) -> Option<()> {\n'
+        '    if mic {\n'
+        '        AUDIO_RAW_MIC.lock().ok()?.take(dst)\n'
+        '    } else {\n'
+        '        AUDIO_RAW_INNER.lock().ok()?.take(dst)\n'
+        '    }\n'
+        '}\n',
+    )
+
+
+def patch_audio_service(text):
+    # 1. Poll at 10 ms for both AVScreenCapture inner audio and voice-call mic
+    #    (both deliver 20 ms buffers) instead of sleeping 100 ms on inner audio.
+    # 2. Exclude target_env = "ohos" from the non-Android branch of send_f32 so
+    #    OHOS does not double-encode and double-send every 20 ms batch.
+    text = replace(
+        text,
+        '                if !got {\n'
+        '                    // The capturer callback paces at 20 ms; poll close to it so\n'
+        '                    // the call does not accumulate 100 ms batches.\n'
+        '                    hbb_common::sleep(if ohos_mic.is_some() { 0.02 } else { 0.1 }).await;\n'
+        '                }\n',
+        '                if !got {\n'
+        '                    // Both AVScreenCapture and the OHAudio call mic deliver 20 ms\n'
+        '                    // buffers; poll at 10 ms so audio streams continuously without\n'
+        '                    // 100 ms stalls or buffer drops.\n'
+        '                    hbb_common::sleep(0.01).await;\n'
+        '                }\n',
+    )
+    return replace(
+        text,
+        '    #[cfg(not(target_os = "android"))]\n'
+        '    match encoder.encoder.encode_vec_float(data, data.len() * 6) {\n',
+        '    #[cfg(not(any(target_os = "android", target_env = "ohos")))]\n'
+        '    match encoder.encoder.encode_vec_float(data, data.len() * 6) {\n',
+    )
+
+
 PATCHES = {
     "src/flutter.rs": patch_flutter,
     "src/flutter_ffi.rs": patch_flutter_ffi,
@@ -466,6 +637,8 @@ PATCHES = {
     "libs/scrap/src/ohos/ohcodec.rs": patch_ohcodec,
     "libs/scrap/src/ohos/decoder.rs": patch_ohos_decoder,
     "libs/scrap/src/common/codec.rs": patch_scrap_codec,
+    "libs/scrap/src/ohos/ffi.rs": patch_ohos_ffi_channel,
+    "src/server/audio_service.rs": patch_audio_service,
 }
 
 

@@ -280,6 +280,8 @@ class PlatformFFI {
 
   Future<void> setFullscreen(bool enabled) async {}
 
+  Future<void> setLandscapeMultiWindow(bool enabled) async {}
+
   Future<void> disableImePreviewText() async {}
 
   Future<void> terminateWindow() async {}

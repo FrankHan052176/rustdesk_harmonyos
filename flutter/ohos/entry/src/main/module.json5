@@ -24,6 +24,7 @@
         "startWindowBackground": "$color:start_window_background",
         "launchType": "singleton",
         "orientation": "auto_rotation_restricted",
+        "preferMultiWindowOrientation": "landscape_auto",
         "minWindowWidth": 640,
         "minWindowHeight": 480,
         "backgroundModes": [

@@ -514,6 +514,14 @@ class PlatformFFI {
         .invokeMethod<void>('setFullscreen', {'enabled': enabled});
   }
 
+  /// Enables or disables HarmonyOS landscape multi-window mode for the main
+  /// window so floating mini-windows match a landscape or portrait remote screen.
+  Future<void> setLandscapeMultiWindow(bool enabled) async {
+    if (!isOhos) return;
+    await _toOhosChannel
+        .invokeMethod<void>('setLandscapeMultiWindow', {'enabled': enabled});
+  }
+
   /// Flutter-OH hands the text an input method is still composing to Dart as
   /// ordinary text. Called once a text field has attached, this makes the
   /// input method compose in its own bar and send only what it commits.

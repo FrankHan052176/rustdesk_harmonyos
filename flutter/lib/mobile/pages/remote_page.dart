@@ -97,6 +97,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   String _value = '';
   Orientation? _currentOrientation;
   Size? _lastOhosWindowSize;
+  bool? _ohosLandscapeMultiWindow;
   final _uniqueKey = UniqueKey();
   Timer? _iosKeyboardWorkaroundTimer;
 
@@ -152,6 +153,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _mobileFocusNode.addListener(_onOhosSoftKeyboardFocusChanged);
     if (isOhos) {
       ohosMiniWindow.addListener(_onOhosMiniWindowChanged);
+      gFFI.ffiModel.addListener(_syncOhosLandscapeMultiWindow);
+      gFFI.canvasModel.addListener(_syncOhosLandscapeMultiWindow);
+      _syncOhosLandscapeMultiWindow();
     }
     gFFI.chatModel
         .changeCurrentKey(MessageKey(widget.id, ChatModel.clientModeID));
@@ -200,6 +204,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     HardwareKeyboard.instance.removeHandler(_handleLocalKeyEvent);
     if (isOhos) {
       ohosMiniWindow.removeListener(_onOhosMiniWindowChanged);
+      gFFI.ffiModel.removeListener(_syncOhosLandscapeMultiWindow);
+      gFFI.canvasModel.removeListener(_syncOhosLandscapeMultiWindow);
+      unawaited(platformFFI.setLandscapeMultiWindow(false));
     }
     super.dispose();
     final closing = _disposeSession();
@@ -267,6 +274,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       _lastOhosWindowSize = windowSize;
       gFFI.canvasModel.rescaleForViewportChange();
     });
+  }
+
+  void _syncOhosLandscapeMultiWindow() {
+    if (!isOhos || !mounted) return;
+    final rect = gFFI.ffiModel.rect;
+    if (rect == null || rect.width <= 0 || rect.height <= 0) return;
+    final enabled = rect.width > rect.height;
+    if (_ohosLandscapeMultiWindow == enabled) return;
+    _ohosLandscapeMultiWindow = enabled;
+    unawaited(platformFFI.setLandscapeMultiWindow(enabled));
   }
 
   void _onOhosMiniWindowChanged() {
@@ -682,42 +699,47 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               getRawPointerAndKeyBody(Overlay(
                 initialEntries: [
                   OverlayEntry(builder: (context) {
-                    return Container(
-                      color: kColorCanvas,
-                      child: isWebDesktop
-                          ? getBodyForDesktopWithListener()
-                          : SafeArea(
-                              left: !miniWindow,
-                              top: !miniWindow,
-                              right: !miniWindow,
-                              bottom: !miniWindow,
-                              child:
-                                  OrientationBuilder(builder: (ctx, orientation) {
-                                if (_currentOrientation != orientation) {
-                                  Timer(const Duration(milliseconds: 200), () {
-                                    if (!mounted) return;
-                                    gFFI.dialogManager
-                                        .resetMobileActionsOverlay(ffi: gFFI);
-                                    _currentOrientation = orientation;
-                                    if (isOhos) {
-                                      gFFI.canvasModel
-                                          .rescaleForViewportChange();
-                                    } else {
-                                      gFFI.canvasModel.updateViewStyle();
-                                    }
-                                  });
-                                }
-                                return Container(
-                                  color: MyTheme.canvasColor,
-                                  child: inputModel.isPhysicalMouse.value
-                                      ? getBodyForMobile()
-                                      : RawTouchGestureDetectorRegion(
-                                          child: getBodyForMobile(),
-                                          ffi: gFFI,
-                                        ),
-                                );
-                              }),
-                            ),
+                    return ValueListenableBuilder<bool>(
+                      valueListenable: ohosMiniWindow,
+                      builder: (context, isMini, child) {
+                        final trimSafeArea = isOhos && isMini;
+                        return Container(
+                          color: kColorCanvas,
+                          child: isWebDesktop
+                              ? getBodyForDesktopWithListener()
+                              : SafeArea(
+                                  left: !trimSafeArea,
+                                  top: !trimSafeArea,
+                                  right: !trimSafeArea,
+                                  bottom: !trimSafeArea,
+                                  child: child!,
+                                ),
+                        );
+                      },
+                      child: OrientationBuilder(builder: (ctx, orientation) {
+                        if (_currentOrientation != orientation) {
+                          Timer(const Duration(milliseconds: 200), () {
+                            if (!mounted) return;
+                            gFFI.dialogManager
+                                .resetMobileActionsOverlay(ffi: gFFI);
+                            _currentOrientation = orientation;
+                            if (isOhos) {
+                              gFFI.canvasModel.rescaleForViewportChange();
+                            } else {
+                              gFFI.canvasModel.updateViewStyle();
+                            }
+                          });
+                        }
+                        return Container(
+                          color: MyTheme.canvasColor,
+                          child: inputModel.isPhysicalMouse.value
+                              ? getBodyForMobile()
+                              : RawTouchGestureDetectorRegion(
+                                  child: getBodyForMobile(),
+                                  ffi: gFFI,
+                                ),
+                        );
+                      }),
                     );
                   })
                 ],
