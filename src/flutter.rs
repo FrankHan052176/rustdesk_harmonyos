@@ -1602,6 +1602,27 @@ pub mod connection_manager {
             debug_assert!(h.get("name").is_none());
             h.insert("name", json!(name));
 
+            #[cfg(target_env = "ohos")]
+            {
+                let payload = serde_json::ser::to_string(&h).unwrap_or("".to_owned());
+                let streams = GLOBAL_EVENT_STREAM.read().unwrap();
+                let mut sent = false;
+                for channel in [super::APP_TYPE_MAIN, "cm"] {
+                    if let Some(s) = streams.get(channel) {
+                        s.add(payload.clone());
+                        sent = true;
+                    }
+                }
+                if !sent {
+                    println!(
+                        "Push event {} failed. No {} or cm event stream found.",
+                        name,
+                        super::APP_TYPE_MAIN
+                    );
+                }
+                return;
+            }
+
             if let Some(s) = GLOBAL_EVENT_STREAM.read().unwrap().get(super::APP_TYPE_CM) {
                 s.add(serde_json::ser::to_string(&h).unwrap_or("".to_owned()));
             } else {

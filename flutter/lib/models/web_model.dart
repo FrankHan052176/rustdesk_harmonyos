@@ -276,9 +276,15 @@ class PlatformFFI {
 
   bool get isOhosHostCaptureRunning => false;
 
+  bool get isOhosCustomScreenRecordingGranted => false;
+
+  bool get isOhosControlDeviceGranted => false;
+
   bool get isOhosHostInputAuthorized => false;
 
   Future<void> syncOhosHostPermissions({bool promptIfMissing = false}) async {}
+
+  Future<bool> openSystemSettings() async => false;
 
   Future<void> setFullscreen(bool enabled) async {}
 

@@ -1248,9 +1248,40 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
             }).marginOnly(left: _kContentHMargin),
         Column(
           children: [
-            _OptionCheckBox(
-                context, 'Enable keyboard/mouse', kOptionEnableKeyboard,
-                enabled: enabled, fakeValue: fakeValue),
+            if (isOhos)
+              ChangeNotifierProvider.value(
+                value: gFFI.serverModel,
+                child: Consumer<ServerModel>(
+                  builder: (context, serverModel, _) => _OptionCheckBox(
+                    context,
+                    'Enable keyboard/mouse',
+                    kOptionEnableKeyboard,
+                    enabled: enabled,
+                    fakeValue:
+                        fakeValue == true && !serverModel.inputControlSupported
+                            ? false
+                            : fakeValue,
+                    optGetter: () =>
+                        serverModel.inputControlSupported &&
+                        mainGetBoolOptionSync(kOptionEnableKeyboard),
+                    optSetter: (k, v) async {
+                      if (v && !serverModel.inputControlSupported) {
+                        await platformFFI.syncOhosHostPermissions();
+                        if (!serverModel.inputControlSupported) {
+                          gFFI.serverModel.showOhosHostPermissionDialog(
+                              requireControlDeviceOnly: true);
+                          return;
+                        }
+                      }
+                      await mainSetBoolOption(k, v);
+                    },
+                  ),
+                ),
+              )
+            else
+              _OptionCheckBox(
+                  context, 'Enable keyboard/mouse', kOptionEnableKeyboard,
+                  enabled: enabled, fakeValue: fakeValue),
             if (isWindows)
               _OptionCheckBox(
                   context, 'Enable remote printer', kOptionEnableRemotePrinter,

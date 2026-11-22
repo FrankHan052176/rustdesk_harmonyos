@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - ohos-port
+      - ag-release
   workflow_dispatch:
     inputs:
       publish-release:
@@ -21,7 +22,7 @@ on:
         default: ""
 
 concurrency:
-  group: flutter-release
+  group: flutter-release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:

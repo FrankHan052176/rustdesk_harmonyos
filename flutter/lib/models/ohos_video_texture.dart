@@ -77,7 +77,7 @@ class OhosVideoTextureModel extends ChangeNotifier with WidgetsBindingObserver {
 
   /// The HarmonyOS channel that creates, binds and destroys video textures.
   static const platformChannel =
-      MethodChannel('top.frankhan.resk.flutter/platform');
+      MethodChannel('com.carriez.flutter_hbb/platform');
 
   /// The session whose Surface decoders paint into the texture.
   final String sessionId;

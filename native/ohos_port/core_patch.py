@@ -135,6 +135,38 @@ def patch_flutter(text):
     ):
         text = replace(text, ANDROID_CFG + '\n    ' + following,
                        ANDROID_OHOS_CFG + '\n    ' + following)
+    # On OHOS desktop (2in1 / tablet freeform), the main isolate listens on
+    # APP_TYPE_MAIN ("main") to open the SessionAbility CM window, while the CM
+    # isolate listens on "cm". Broadcast CM events to both streams when present.
+    text = replace(
+        text,
+        '            debug_assert!(h.get("name").is_none());\n'
+        '            h.insert("name", json!(name));\n\n'
+        '            if let Some(s) = GLOBAL_EVENT_STREAM.read().unwrap().get(super::APP_TYPE_CM) {',
+        '            debug_assert!(h.get("name").is_none());\n'
+        '            h.insert("name", json!(name));\n\n'
+        '            #[cfg(target_env = "ohos")]\n'
+        '            {\n'
+        '                let payload = serde_json::ser::to_string(&h).unwrap_or("".to_owned());\n'
+        '                let streams = GLOBAL_EVENT_STREAM.read().unwrap();\n'
+        '                let mut sent = false;\n'
+        '                for channel in [super::APP_TYPE_MAIN, "cm"] {\n'
+        '                    if let Some(s) = streams.get(channel) {\n'
+        '                        s.add(payload.clone());\n'
+        '                        sent = true;\n'
+        '                    }\n'
+        '                }\n'
+        '                if !sent {\n'
+        '                    println!(\n'
+        '                        "Push event {} failed. No {} or cm event stream found.",\n'
+        '                        name,\n'
+        '                        super::APP_TYPE_MAIN\n'
+        '                    );\n'
+        '                }\n'
+        '                return;\n'
+        '            }\n\n'
+        '            if let Some(s) = GLOBAL_EVENT_STREAM.read().unwrap().get(super::APP_TYPE_CM) {',
+    )
     return text
 
 

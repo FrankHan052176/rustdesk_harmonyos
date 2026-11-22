@@ -87,7 +87,7 @@ class PlatformFFI {
   static final PlatformFFI instance = PlatformFFI._();
   final _toAndroidChannel = const MethodChannel('mChannel');
   final _toOhosChannel =
-      const MethodChannel('top.frankhan.resk.flutter/platform');
+      const MethodChannel('com.carriez.flutter_hbb/platform');
 
   RustdeskImpl get ffiBind => _ffiBind;
   @visibleForTesting
@@ -103,12 +103,19 @@ class PlatformFFI {
   late final _OhosCaptureRunningDart _ohosCaptureRunning;
   _OhosHostInputStatusDart? _ohosHostInputStatus;
   _OhosSetHostInputPermissionDart? _ohosSetHostInputPermission;
+  bool _ohosCustomScreenRecordingGranted = false;
+  bool _ohosControlDeviceGranted = false;
 
   /// Whether the OpenHarmony core is capturing the screen for the controlled side.
   ///
   /// Capture counts as running from the moment the request is submitted, so this
   /// cannot tell a pending consent dialog apart from a granted capture.
   bool get isOhosHostCaptureRunning => isOhos && _ohosCaptureRunning() != 0;
+
+  bool get isOhosCustomScreenRecordingGranted =>
+      _ohosCustomScreenRecordingGranted;
+
+  bool get isOhosControlDeviceGranted => _ohosControlDeviceGranted;
 
   /// Whether the core holds an OS authorization for injecting input into the
   /// captured display. Without it every injected event is dropped, so the input
@@ -435,12 +442,13 @@ class PlatformFFI {
           .invokeMapMethod<String, dynamic>('getWindowLaunchPayload');
 
   Future<void> openSessionWindow(Map<String, dynamic> payload, String title,
-      {int? width, int? height}) async {
+      {int? width, int? height, String? align}) async {
     await _toOhosChannel.invokeMethod<String>('openSessionWindow', {
       'payload': jsonEncode(payload),
       'title': title,
       if (width != null) 'width': width,
       if (height != null) 'height': height,
+      if (align != null) 'align': align,
     });
   }
 
@@ -573,19 +581,26 @@ class PlatformFFI {
     }
   }
 
+  Future<bool> openSystemSettings() async {
+    if (!isOhos) return false;
+    try {
+      return await _toOhosChannel.invokeMethod<bool>('openSystemSettings') ??
+          false;
+    } catch (error) {
+      debugPrint('OHOS openSystemSettings failed: $error');
+      return false;
+    }
+  }
+
   Future<void> syncOhosHostPermissions({bool promptIfMissing = false}) async {
     if (!isOhos) return;
     try {
-      var perms = await _toOhosChannel
+      final perms = await _toOhosChannel
           .invokeMapMethod<String, dynamic>('checkHostPermissions');
-      if (promptIfMissing &&
-          ohosDeviceType == '2in1' &&
-          (perms?['controlDevice'] != true ||
-              perms?['customScreenRecording'] != true)) {
-        perms = await _toOhosChannel
-            .invokeMapMethod<String, dynamic>('requestHostPermissionsOnSetting');
-      }
       final controlDevice = perms?['controlDevice'] == true;
+      final customScreenRecording = perms?['customScreenRecording'] == true;
+      _ohosControlDeviceGranted = controlDevice;
+      _ohosCustomScreenRecordingGranted = customScreenRecording;
       _ohosSetHostInputPermission?.call(controlDevice ? 1 : 0);
       debugPrint('OHOS host ACL permissions: $perms');
     } catch (error) {
@@ -600,7 +615,7 @@ class PlatformFFI {
   /// consent dialog is a system dialog the core raises itself.
   Future<String> startOhosHost() async {
     if (!isOhos) return 'OHOS host is unavailable';
-    await syncOhosHostPermissions(promptIfMissing: true);
+    await syncOhosHostPermissions();
     if (_ohosServerStart() != 0) {
       return 'Failed to start the HarmonyOS server';
     }

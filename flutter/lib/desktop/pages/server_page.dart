@@ -236,9 +236,13 @@ class ConnectionManagerState extends State<ConnectionManager>
               },
               pageViewBuilder: (pageView) => LayoutBuilder(
                 builder: (context, constrains) {
+                  final showSidePage = isOhos
+                      ? constrains.maxWidth >=
+                          kConnectionManagerWindowSizeClosedChat.width + 200
+                      : constrains.maxWidth >
+                          kConnectionManagerWindowSizeClosedChat.width;
                   var borderWidth = 0.0;
-                  if (constrains.maxWidth >
-                      kConnectionManagerWindowSizeClosedChat.width) {
+                  if (showSidePage) {
                     borderWidth = kConnectionManagerWindowSizeOpenChat.width -
                         constrains.maxWidth;
                   } else {
@@ -253,9 +257,15 @@ class ConnectionManagerState extends State<ConnectionManager>
                           borderWidth;
                   final realChatPageWidth =
                       constrains.maxWidth - realClosedWidth;
+                  final mainPage = allowRemoteCMModification()
+                      ? pageView
+                      : buildRemoteBlock(
+                          child: _buildKeyEventBlock(pageView),
+                          block: _controlPageBlock,
+                          mask: false,
+                        );
                   final row = Row(children: [
-                    if (constrains.maxWidth >
-                        kConnectionManagerWindowSizeClosedChat.width)
+                    if (showSidePage)
                       Consumer<ChatModel>(
                           builder: (_, model, child) => SizedBox(
                                 width: realChatPageWidth,
@@ -266,17 +276,13 @@ class ConnectionManagerState extends State<ConnectionManager>
                                         block: _sidePageBlock,
                                         mask: true),
                               )),
-                    SizedBox(
-                        width: realClosedWidth,
-                        child: SizedBox(
-                            width: realClosedWidth,
-                            child: allowRemoteCMModification()
-                                ? pageView
-                                : buildRemoteBlock(
-                                    child: _buildKeyEventBlock(pageView),
-                                    block: _controlPageBlock,
-                                    mask: false,
-                                  ))),
+                    if (isOhos && !showSidePage)
+                      Expanded(child: mainPage)
+                    else
+                      SizedBox(
+                          width: realClosedWidth,
+                          child: SizedBox(
+                              width: realClosedWidth, child: mainPage)),
                   ]);
                   return Container(
                     color: Theme.of(context).scaffoldBackgroundColor,
@@ -1076,7 +1082,7 @@ class _CmControlPanel extends StatelessWidget {
             Expanded(
               child: buildButton(context,
                   color: Colors.redAccent,
-                  onClick: handleDisconnect,
+                  onClick: () => handleDisconnect(context),
                   text: 'Disconnect',
                   icon: Icon(
                     Icons.link_off_rounded,
@@ -1150,9 +1156,7 @@ class _CmControlPanel extends StatelessWidget {
                       color: MyTheme.accent,
                       onClick: () {
                         handleAccept(context);
-                        if (isOhos) {
-                          platformFFI.minimizeWindow();
-                        } else {
+                        if (!isOhos) {
                           windowManager.minimize();
                         }
                       },
@@ -1167,7 +1171,7 @@ class _CmControlPanel extends StatelessWidget {
                 context,
                 color: Colors.transparent,
                 border: Border.all(color: Colors.grey),
-                onClick: handleDisconnect,
+                onClick: () => handleDisconnect(context),
                 text: 'Cancel',
                 textColor: null,
               ),
@@ -1239,8 +1243,15 @@ class _CmControlPanel extends StatelessWidget {
         .marginAll(4);
   }
 
-  void handleDisconnect() {
-    bind.cmCloseConnection(connId: client.id);
+  void handleDisconnect(BuildContext context) {
+    if (isOhos && !client.authorized) {
+      final model = context.mounted
+          ? Provider.of<ServerModel>(context, listen: false)
+          : gFFI.serverModel;
+      model.sendLoginResponse(client, false);
+    } else {
+      bind.cmCloseConnection(connId: client.id);
+    }
   }
 
   void handleAccept(BuildContext context) {

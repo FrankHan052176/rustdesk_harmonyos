@@ -19,7 +19,7 @@ import { RustDeskSessionLaunch, RustDeskSessionWindows } from './RustDeskSession
 import { disableImePreviewText, RustDeskKeyboardVisibility } from './RustDeskSoftKeyboard';
 import { RustDeskVideoTextures } from './RustDeskVideoTexture';
 
-const METHOD_CHANNEL_NAME = 'top.frankhan.resk.flutter/platform';
+const METHOD_CHANNEL_NAME = 'com.carriez.flutter_hbb/platform';
 
 export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCallHandler, AbilityAware {
   private channel: MethodChannel | null = null;
@@ -36,6 +36,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
   private sessionWindowTitle: string;
   private sessionWindowWidth: number;
   private sessionWindowHeight: number;
+  private sessionWindowAlign: string;
   private launchDelivered: boolean = false;
   private focusWindow: window.Window | null = null;
   private readonly onWindowEvent = (event: window.WindowEventType): void => {
@@ -53,6 +54,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
     this.sessionWindowTitle = launch?.title ?? '';
     this.sessionWindowWidth = launch?.width ?? 0;
     this.sessionWindowHeight = launch?.height ?? 0;
+    this.sessionWindowAlign = launch?.align ?? '';
   }
 
   /// Resolves true only when the session may be torn down. A pending launch is
@@ -164,11 +166,12 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
           const title = (call.argument('title') as string | null) ?? '';
           const reqWidth = (call.argument('width') as number | null) ?? 0;
           const reqHeight = (call.argument('height') as number | null) ?? 0;
+          const align = (call.argument('align') as string | null) ?? '';
           if (this.abilityContext === null || payload.length === 0) {
             result.error('OHOS_WINDOW_UNAVAILABLE', 'A window context and session payload are required', null);
             return;
           }
-          RustDeskSessionWindows.open(this.abilityContext, payload, title, reqWidth, reqHeight)
+          RustDeskSessionWindows.open(this.abilityContext, payload, title, reqWidth, reqHeight, align)
             .then((windowId: string) => result.success(windowId))
             .catch(() => result.error('OHOS_WINDOW_START_FAILED', 'Unable to open a session window', null));
           return;
@@ -213,11 +216,20 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
                 await mainWindow.setWindowTitle(this.sessionWindowTitle);
                 if (this.sessionWindowWidth > 0 && this.sessionWindowHeight > 0) {
                   try {
-                    const density = display.getDefaultDisplaySync().densityPixels || 1;
-                    await mainWindow.resize(
-                      Math.round(this.sessionWindowWidth * density),
-                      Math.round(this.sessionWindowHeight * density),
-                    );
+                    const displayInfo = display.getDefaultDisplaySync();
+                    const density = displayInfo.densityPixels || 1;
+                    const wPx = Math.round(this.sessionWindowWidth * density);
+                    const hPx = Math.round(this.sessionWindowHeight * density);
+                    await mainWindow.resize(wPx, hPx);
+                    if (this.sessionWindowAlign === 'topRight') {
+                      const marginPx = Math.round(24 * density);
+                      const x = Math.max(0, displayInfo.width - wPx - marginPx);
+                      const y = marginPx;
+                      try {
+                        await mainWindow.moveWindowTo(x, y);
+                      } catch (_) {
+                      }
+                    }
                   } catch (_) {
                   }
                 }
@@ -317,6 +329,21 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
             .then((status: Map<string, boolean>) => result.success(status))
             .catch((error: Error) => result.error('OHOS_PERMISSION_ERROR', this.errorMessage(error), null));
           return;
+        case 'openSystemSettings':
+          if (this.abilityContext === null) {
+            result.success(false);
+            return;
+          }
+          this.abilityContext.startAbility({
+            bundleName: 'com.huawei.hmos.settings',
+            abilityName: 'com.huawei.hmos.settings.MainAbility',
+          })
+            .then(() => result.success(true))
+            .catch((error: Error) => {
+              console.error(`RustDesk openSystemSettings failed: ${this.errorMessage(error)}`);
+              result.success(false);
+            });
+          return;
         case 'disableImePreviewText':
           disableImePreviewText()
             .then(() => result.success(null))
@@ -407,7 +434,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
       const context = this.abilityContext;
       const wantAgentInfo: wantAgent.WantAgentInfo = {
         wants: [{
-          bundleName: 'top.frankhan.resk.flutter',
+          bundleName: context.abilityInfo.bundleName,
           abilityName: 'EntryAbility',
         }],
         actionType: wantAgent.OperationType.START_ABILITY,

@@ -23,7 +23,16 @@ import zipfile
 import zlib
 
 
-BUNDLE_NAME = 'top.frankhan.resk.flutter'
+def _default_bundle_name() -> str:
+    app_json = Path(__file__).resolve().parent.parent / 'flutter' / 'ohos' / 'AppScope' / 'app.json5'
+    try:
+        data = json.loads(app_json.read_text(encoding='utf-8'))
+        return data['app']['bundleName']
+    except Exception:
+        return 'com.carriez.flutter_hbb'
+
+
+BUNDLE_NAME = _default_bundle_name()
 NATIVE_ABI = 'arm64-v8a'
 AOT_PAYLOAD = 'libapp.so'
 REQUIRED_NATIVE_LIBS = ('liblibrustdesk.so', 'libc++_shared.so', 'libflutter.so', AOT_PAYLOAD)

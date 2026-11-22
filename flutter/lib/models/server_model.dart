@@ -48,6 +48,7 @@ class ServerModel with ChangeNotifier {
   bool _ohosCmWindowOpen = false;
   bool _ohosCmWindowOpening = false;
   int _ohosPermPollTick = 0;
+  bool _ohosHostPermReminded = false;
 
   late String _emptyIdShow;
   late final IDTextEditingController _serverId;
@@ -207,6 +208,9 @@ class ServerModel with ChangeNotifier {
         }
         if (!inputControlSupported && (++_ohosPermPollTick % 4 == 0)) {
           await platformFFI.syncOhosHostPermissions();
+          if (inputControlSupported) {
+            notifyListeners();
+          }
         }
         if (inputControlSupported &&
             bind.mainGetLocalOption(key: 'ohos-keyboard-perm-migrated') != 'Y') {
@@ -544,6 +548,7 @@ class ServerModel with ChangeNotifier {
           bind.mainSetLocalOption(key: 'ohos-keyboard-perm-migrated', value: 'Y');
         }
         updateClientState();
+        _maybeRemindOhosHostPermissions();
       } catch (error) {
         _isStart = false;
         _mediaOk = false;
@@ -662,11 +667,13 @@ class ServerModel with ChangeNotifier {
   void addConnection(Map<String, dynamic> evt) {
     try {
       final client = Client.fromJson(jsonDecode(evt["client"]));
+      bool isNewClient = false;
       if (client.authorized) {
         parent.target?.dialogManager.dismissByTag(getLoginDialogTag(client.id));
         final index = _clients.indexWhere((c) => c.id == client.id);
         if (index < 0) {
           _clients.add(client);
+          isNewClient = true;
         } else {
           if (_clients[index].authorized) {
             _clients[index].privacyMode = client.privacyMode;
@@ -675,6 +682,7 @@ class ServerModel with ChangeNotifier {
           }
           _clients[index].authorized = true;
           _clients[index].privacyMode = client.privacyMode;
+          notifyListeners();
         }
       } else {
         final index = _clients.indexWhere((c) => c.id == client.id);
@@ -684,8 +692,11 @@ class ServerModel with ChangeNotifier {
           return;
         }
         _clients.add(client);
+        isNewClient = true;
       }
-      _addTab(client);
+      if (isNewClient) {
+        _addTab(client);
+      }
       // remove disconnected
       final index_disconnected = _clients
           .indexWhere((c) => c.disconnected && c.peerId == client.peerId);
@@ -716,12 +727,76 @@ class ServerModel with ChangeNotifier {
         .openSessionWindow(
           {'kind': 'cm'},
           translate('RustDesk'),
-          width: kConnectionManagerWindowSizeClosedChat.width.toInt(),
-          height: kConnectionManagerWindowSizeClosedChat.height.toInt(),
+          width: 320,
+          height: 490,
+          align: 'topRight',
         )
-        .then((_) => _ohosCmWindowOpen = true)
-        .catchError((error) => debugPrint('Failed to open OHOS CM window: $error'))
+        .then((_) {
+          _ohosCmWindowOpen = true;
+        })
+        .catchError((error) {
+          debugPrint('Failed to open OHOS CM window: $error');
+        })
         .whenComplete(() => _ohosCmWindowOpening = false);
+  }
+
+  void _maybeRemindOhosHostPermissions() {
+    if (!isOhos || _ohosHostPermReminded) return;
+    if (!(ohosDeviceType == '2in1' || isOhosDesktop)) return;
+    final missingScreenRecording =
+        !platformFFI.isOhosCustomScreenRecordingGranted;
+    final missingControlDevice = !platformFFI.isOhosHostInputAuthorized;
+    if (!missingScreenRecording && !missingControlDevice) return;
+    _ohosHostPermReminded = true;
+    showOhosHostPermissionDialog();
+  }
+
+  void showOhosHostPermissionDialog({bool requireControlDeviceOnly = false}) {
+    if (!isOhos) return;
+    final missingScreenRecording = !requireControlDeviceOnly &&
+        !platformFFI.isOhosCustomScreenRecordingGranted;
+    final missingControlDevice =
+        requireControlDeviceOnly || !platformFFI.isOhosHostInputAuthorized;
+    if (!missingScreenRecording && !missingControlDevice) return;
+    final missingItems = <String>[
+      if (missingScreenRecording) '• CUSTOM_SCREEN_RECORDING（无弹窗录屏）',
+      if (missingControlDevice) '• CONTROL_DEVICE（远程键鼠控制）',
+    ];
+    final dialogManager = parent.target?.dialogManager ?? gFFI.dialogManager;
+    const dialogTag = 'ohos-host-acl-permission';
+    dialogManager.dismissByTag(dialogTag);
+    dialogManager.show((setState, close, context) {
+      openSettings() {
+        platformFFI.openSystemSettings();
+        close();
+      }
+
+      return CustomAlertDialog(
+        title: Row(children: [
+          const Icon(Icons.admin_panel_settings_outlined,
+              color: Colors.orangeAccent, size: 24),
+          const SizedBox(width: 8),
+          Text(translate('Permissions')),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('当前设备缺少以下受限系统权限，部分被控功能可能受限：'),
+            const SizedBox(height: 8),
+            ...missingItems.map((item) => Text(item)),
+            const SizedBox(height: 10),
+            const Text('请前往 系统设置 → 隐私和安全 中为本应用开启对应权限。'),
+          ],
+        ),
+        actions: [
+          dialogButton('知道了', onPressed: close, isOutline: true),
+          dialogButton('前往设置', onPressed: openSettings),
+        ],
+        onSubmit: openSettings,
+        onCancel: close,
+      );
+    }, tag: dialogTag);
   }
 
   void _addTab(Client client) {
