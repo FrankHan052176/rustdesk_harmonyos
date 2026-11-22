@@ -272,6 +272,31 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
             return null;
           });
           return;
+        case 'resizeWindow': {
+          const reqWidth = (call.argument('width') as number | null) ?? 0;
+          const reqHeight = (call.argument('height') as number | null) ?? 0;
+          const align = (call.argument('align') as string | null) ?? '';
+          this.withMainWindow(result, async (mainWindow: window.Window): Promise<Object | null> => {
+            if (reqWidth > 0 && reqHeight > 0) {
+              const displayInfo = display.getDefaultDisplaySync();
+              const density = displayInfo.densityPixels || 1;
+              const wPx = Math.round(reqWidth * density);
+              const hPx = Math.round(reqHeight * density);
+              await mainWindow.resize(wPx, hPx);
+              if (align === 'topRight') {
+                const marginPx = Math.round(24 * density);
+                const x = Math.max(0, displayInfo.width - wPx - marginPx);
+                const y = marginPx;
+                try {
+                  await mainWindow.moveWindowTo(x, y);
+                } catch (_) {
+                }
+              }
+            }
+            return null;
+          });
+          return;
+        }
         case 'toggleMaximizeWindow':
           this.withMainWindow(result, async (mainWindow: window.Window): Promise<Object | null> => {
             if (this.isMaximized(mainWindow)) {

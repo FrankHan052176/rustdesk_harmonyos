@@ -513,6 +513,15 @@ class PlatformFFI {
     await _toOhosChannel.invokeMethod<void>('minimizeWindow');
   }
 
+  Future<void> resizeWindow(int width, int height, {String? align}) async {
+    if (!isOhos) return;
+    await _toOhosChannel.invokeMethod<void>('resizeWindow', {
+      'width': width,
+      'height': height,
+      if (align != null) 'align': align,
+    });
+  }
+
   Future<bool> toggleMaximizeWindow() async {
     if (!isOhos) return false;
     return await _toOhosChannel.invokeMethod<bool>('toggleMaximizeWindow') ??

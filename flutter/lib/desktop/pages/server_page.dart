@@ -252,8 +252,9 @@ class ConnectionManagerState extends State<ConnectionManager>
                   if (borderWidth < 0 || borderWidth > 50) {
                     borderWidth = 0;
                   }
-                  final realClosedWidth =
-                      kConnectionManagerWindowSizeClosedChat.width -
+                  final realClosedWidth = isOhos
+                      ? 320.0
+                      : kConnectionManagerWindowSizeClosedChat.width -
                           borderWidth;
                   final realChatPageWidth =
                       constrains.maxWidth - realClosedWidth;
@@ -706,9 +707,11 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
     final isKeyboardEffective = client.keyboard && isKeyboardPermitted;
     return Container(
       width: double.infinity,
-      height: 160.0,
+      height: isOhos ? null : 160.0,
       margin: EdgeInsets.all(5.0),
-      padding: EdgeInsets.all(5.0),
+      padding: isOhos
+          ? const EdgeInsets.fromLTRB(5.0, 5.0, 5.0, 10.0)
+          : const EdgeInsets.all(5.0),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10.0),
         color: Theme.of(context).colorScheme.background,
@@ -722,6 +725,7 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
         ],
       ),
       child: Column(
+        mainAxisSize: isOhos ? MainAxisSize.min : MainAxisSize.max,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Text(
@@ -729,8 +733,11 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             textAlign: TextAlign.center,
           ).marginOnly(left: 4.0, bottom: 8.0),
-          Expanded(
+          Flexible(
+            fit: isOhos ? FlexFit.loose : FlexFit.tight,
             child: GridView.count(
+              shrinkWrap: isOhos,
+              physics: isOhos ? const NeverScrollableScrollPhysics() : null,
               crossAxisCount: crossAxisCount,
               padding: EdgeInsets.symmetric(horizontal: spacing),
               mainAxisSpacing: spacing,
@@ -830,21 +837,22 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
                         translate('Enable file copy and paste'),
                         canModify: canModifyPermission,
                       ),
-                      buildPermissionIcon(
-                        client.restart,
-                        Icons.restart_alt_rounded,
-                        (enabled) {
-                          bind.cmSwitchPermission(
-                              connId: client.id,
-                              name: "restart",
-                              enabled: enabled);
-                          setState(() {
-                            client.restart = enabled;
-                          });
-                        },
-                        translate('Enable remote restart'),
-                        canModify: canModifyPermission,
-                      ),
+                      if (!isOhos)
+                        buildPermissionIcon(
+                          client.restart,
+                          Icons.restart_alt_rounded,
+                          (enabled) {
+                            bind.cmSwitchPermission(
+                                connId: client.id,
+                                name: "restart",
+                                enabled: enabled);
+                            setState(() {
+                              client.restart = enabled;
+                            });
+                          },
+                          translate('Enable remote restart'),
+                          canModify: canModifyPermission,
+                        ),
                       buildPermissionIcon(
                         client.recording,
                         Icons.videocam_rounded,

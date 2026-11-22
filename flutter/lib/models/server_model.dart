@@ -246,10 +246,19 @@ class ServerModel with ChangeNotifier {
     // Initial keyboard status is off on iOS; Android syncs it from InputService natively.
     if (isIOS) {
       bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
-    } else if (isOhos && !inputControlSupported) {
-      // Keep in-memory state off without overwriting persisted config; once
-      // CONTROL_DEVICE is granted the host becomes controllable immediately.
-      _inputOk = false;
+    } else if (isOhos) {
+      if (!inputControlSupported) {
+        // Keep in-memory state off without overwriting persisted config; once
+        // CONTROL_DEVICE is granted the host becomes controllable immediately.
+        _inputOk = false;
+      }
+      // HarmonyOS normal_hap cannot host a system terminal, virtual remote
+      // printer, OS reboot, or input-blocking driver; keep these off so peers
+      // are not offered unsupported controls.
+      bind.mainSetOption(key: kOptionEnableTerminal, value: 'N');
+      bind.mainSetOption(key: kOptionEnableRemotePrinter, value: 'N');
+      bind.mainSetOption(key: kOptionEnableRemoteRestart, value: 'N');
+      bind.mainSetOption(key: kOptionEnableBlockInput, value: 'N');
     }
   }
 
