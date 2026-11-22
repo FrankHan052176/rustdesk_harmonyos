@@ -394,12 +394,14 @@ pub fn start(width: i32, height: i32) -> Result<(), String> {
             videoFrameHeight: height,
             videoSource: OH_VIDEO_SOURCE_SURFACE_RGBA,
         };
+        config.videoInfo.videoEncInfo.videoFrameRate = 60;
         let err = OH_AVScreenCapture_Init(capture, config);
         if err != AV_SCREEN_CAPTURE_ERR_OK {
             OH_AVScreenCapture_Release(capture);
             return Err(format!("Init failed: {err}"));
         }
         let _ = OH_AVScreenCapture_ShowCursor(capture, true);
+        set_max_video_frame_rate(capture, 60);
         *guard = Some(Capture {
             capture,
             width,
@@ -434,7 +436,13 @@ pub fn start(width: i32, height: i32) -> Result<(), String> {
     let start_err = unsafe {
         let ptr = CAPTURE.lock().unwrap().as_ref().map(|c| c.capture);
         match ptr {
-            Some(ptr) => OH_AVScreenCapture_StartScreenCapture(ptr),
+            Some(ptr) => {
+                let err = OH_AVScreenCapture_StartScreenCapture(ptr);
+                if err == AV_SCREEN_CAPTURE_ERR_OK {
+                    set_max_video_frame_rate(ptr, 60);
+                }
+                err
+            }
             None => -1,
         }
     };
@@ -725,13 +733,18 @@ unsafe extern "C" fn on_error_legacy(_capture: *mut OH_AVScreenCapture, error_co
 }
 
 unsafe extern "C" fn on_state_change(
-    _capture: *mut OH_AVScreenCapture,
+    capture: *mut OH_AVScreenCapture,
     state_code: c_int,
     _userData: *mut c_void,
 ) {
     log::info!("avscreen capture state: {state_code}");
     match state_code {
-        OH_SCREEN_CAPTURE_STATE_STARTED => notify_state(state_code),
+        OH_SCREEN_CAPTURE_STATE_STARTED => {
+            if RUNNING.load(Ordering::SeqCst) {
+                set_max_video_frame_rate(capture, 60);
+            }
+            notify_state(state_code);
+        }
         OH_SCREEN_CAPTURE_STATE_CANCELED
         | OH_SCREEN_CAPTURE_STATE_STOPPED_BY_USER
         | OH_SCREEN_CAPTURE_STATE_INTERRUPTED_BY_OTHER
@@ -757,7 +770,42 @@ unsafe extern "C" fn on_error(
     log::error!("avscreen capture error: {error_code}");
 }
 
+const RTLD_NOW: c_int = 2;
+const RTLD_LOCAL: c_int = 0;
+
 extern "C" {
+    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     #[link_name = "close"]
     fn libc_close(fd: c_int) -> c_int;
+}
+
+unsafe fn set_max_video_frame_rate(capture: *mut OH_AVScreenCapture, fps: i32) {
+    if capture.is_null() {
+        return;
+    }
+    type SetMaxFpsFn = unsafe extern "C" fn(*mut OH_AVScreenCapture, i32) -> c_int;
+    static SET_MAX_FPS: std::sync::OnceLock<Option<SetMaxFpsFn>> = std::sync::OnceLock::new();
+    let func = *SET_MAX_FPS.get_or_init(|| {
+        let handle = dlopen(
+            b"libnative_avscreen_capture.so\0".as_ptr() as *const c_char,
+            RTLD_NOW | RTLD_LOCAL,
+        );
+        if handle.is_null() {
+            return None;
+        }
+        let sym = dlsym(
+            handle,
+            b"OH_AVScreenCapture_SetMaxVideoFrameRate\0".as_ptr() as *const c_char,
+        );
+        if sym.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute::<*mut c_void, SetMaxFpsFn>(sym))
+        }
+    });
+    if let Some(func) = func {
+        let ret = func(capture, fps);
+        log::info!("avscreen SetMaxVideoFrameRate({fps}) -> {ret}");
+    }
 }

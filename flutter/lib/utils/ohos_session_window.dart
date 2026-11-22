@@ -33,7 +33,8 @@ class OhosSessionWindow {
     await ready.future;
     closing.value = true;
     // Removing the navigator unmounts every session page before engine teardown.
-    await WidgetsBinding.instance.endOfFrame;
+    await WidgetsBinding.instance.endOfFrame
+        .timeout(const Duration(milliseconds: 150), onTimeout: () {});
     final pending = <Future<void>>[
       ..._disposals,
       for (final close in _sessions.values) close(),
@@ -45,7 +46,7 @@ class OhosSessionWindow {
     Object? failure;
     for (final task in pending) {
       try {
-        await task;
+        await task.timeout(const Duration(milliseconds: 500));
       } catch (error) {
         failure ??= error;
       }

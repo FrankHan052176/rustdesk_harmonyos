@@ -460,10 +460,15 @@ class PlatformFFI {
 
   Future<void> _finishSessionWindow() async {
     await OhosSessionWindow.close();
-    if (_globalEventSubscription != null) {
-      await _ffiBind.stopGlobalEventStream(appType: _appType);
-      await _globalEventSubscription!.cancel();
-      _globalEventSubscription = null;
+    final sub = _globalEventSubscription;
+    _globalEventSubscription = null;
+    if (sub != null) {
+      try {
+        await _ffiBind
+            .stopGlobalEventStream(appType: _appType)
+            .timeout(const Duration(milliseconds: 300), onTimeout: () {});
+      } catch (_) {}
+      unawaited(sub.cancel());
     }
   }
 
@@ -670,7 +675,8 @@ class PlatformFFI {
     if (OhosSessionWindow.isSession) {
       // A failed teardown still leaves the user a way out of a stuck window.
       try {
-        await _cleanupSessionWindow();
+        await _cleanupSessionWindow()
+            .timeout(const Duration(milliseconds: 800));
       } catch (error) {
         debugPrint('OHOS session cleanup failed (${error.runtimeType})');
       }

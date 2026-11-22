@@ -38,6 +38,7 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
   private sessionWindowHeight: number;
   private sessionWindowAlign: string;
   private launchDelivered: boolean = false;
+  private closingSelf: boolean = false;
   private focusWindow: window.Window | null = null;
   private readonly onWindowEvent = (event: window.WindowEventType): void => {
     if (event === window.WindowEventType.WINDOW_ACTIVE) {
@@ -60,6 +61,9 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
   /// Resolves true only when the session may be torn down. A pending launch is
   /// released here because the window can be closed before Dart ever starts.
   requestWindowClose(): Promise<boolean> {
+    if (this.closingSelf) {
+      return Promise.resolve(true);
+    }
     if (!this.launchDelivered) {
       this.sessionLaunch = null;
       return Promise.resolve(true);
@@ -401,9 +405,13 @@ export default class RustDeskPlatformBridge implements FlutterPlugin, MethodCall
             result.error('OHOS_WINDOW_CONTEXT_MISSING', 'HarmonyOS UIAbility context is unavailable', null);
             return;
           }
+          this.closingSelf = true;
           this.abilityContext.terminateSelf()
             .then(() => result.success(null))
-            .catch((error: Error) => result.error('OHOS_WINDOW_ERROR', this.errorMessage(error), null));
+            .catch((error: Error) => {
+              console.error(`RustDesk terminateSelf failed: ${this.errorMessage(error)}`);
+              result.error('OHOS_WINDOW_ERROR', this.errorMessage(error), null);
+            });
           return;
         default:
           result.notImplemented();
