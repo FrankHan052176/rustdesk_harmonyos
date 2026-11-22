@@ -265,6 +265,8 @@ class PlatformFFI {
 
   Future<void> minimizeWindow() async {}
 
+  Future<void> resizeWindow(int width, int height, {String? align}) async {}
+
   Future<bool> toggleMaximizeWindow() async => false;
 
   Future<void> startMovingWindow() async {}
