@@ -31,8 +31,10 @@ const BITRATE_MODE_CBR: c_int = 0;
 // The controlled-side encoder mirrors the desktop hw encoder defaults: 30 fps
 // rate-control hint, and a bounded GOP (keyframe_interval is in frames) so a
 // lossy stretch self-heals instead of waiting for a session refresh.
-const DEFAULT_FPS: i32 = 30;
+const DEFAULT_FPS: i32 = 60;
 const DEFAULT_GOP_MS: i32 = 10_000;
+const RTLD_NOW: c_int = 2;
+const RTLD_LOCAL: c_int = 0;
 
 #[repr(C)]
 pub struct OH_AVCodecBufferAttr {
@@ -93,6 +95,8 @@ extern "C" {
     fn OH_AVFormat_Create() -> *mut c_void;
     fn OH_AVFormat_SetLongValue(format: *mut c_void, key: *const c_char, value: i64) -> bool;
     fn OH_AVFormat_SetDoubleValue(format: *mut c_void, key: *const c_char, value: f64) -> bool;
+    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
 
 // Exported constants in libnative_media_core.so; linked by name instead of
@@ -410,6 +414,89 @@ impl OhCodecEncoder {
     }
 }
 
+struct LowLatencyKeys {
+    enable_low_latency: *const c_char,
+    enable_b_frame: *const c_char,
+    max_b_frames: *const c_char,
+}
+
+unsafe impl Send for LowLatencyKeys {}
+unsafe impl Sync for LowLatencyKeys {}
+
+static LOW_LATENCY_KEYS: std::sync::OnceLock<LowLatencyKeys> = std::sync::OnceLock::new();
+
+unsafe fn resolve_md_key(symbol: &[u8], fallback: &'static [u8]) -> *const c_char {
+    for lib in [
+        b"libnative_media_codecbase.so\0".as_slice(),
+        b"libnative_media_core.so\0".as_slice(),
+    ] {
+        let handle = dlopen(lib.as_ptr() as *const c_char, RTLD_NOW | RTLD_LOCAL);
+        if !handle.is_null() {
+            let ptr = dlsym(handle, symbol.as_ptr() as *const c_char);
+            if !ptr.is_null() {
+                let key = *(ptr as *const *const c_char);
+                if !key.is_null() {
+                    return key;
+                }
+            }
+        }
+    }
+    fallback.as_ptr() as *const c_char
+}
+
+fn low_latency_keys() -> &'static LowLatencyKeys {
+    LOW_LATENCY_KEYS.get_or_init(|| unsafe {
+        LowLatencyKeys {
+            enable_low_latency: resolve_md_key(
+                b"OH_MD_KEY_VIDEO_ENABLE_LOW_LATENCY\0",
+                b"video_enable_low_latency\0",
+            ),
+            enable_b_frame: resolve_md_key(
+                b"OH_MD_KEY_VIDEO_ENCODER_ENABLE_B_FRAME\0",
+                b"video_encoder_enable_b_frame\0",
+            ),
+            max_b_frames: resolve_md_key(
+                b"OH_MD_KEY_VIDEO_ENCODER_MAX_B_FRAMES\0",
+                b"video_encoder_max_b_frames\0",
+            ),
+        }
+    })
+}
+
+fn build_encoder_format(
+    mime: &str,
+    width: i32,
+    height: i32,
+    bitrate: u32,
+    gop_ms: i32,
+    low_latency: bool,
+) -> ResultType<(*mut c_void, bool)> {
+    let fmt = unsafe { OH_AVFormat_CreateVideoFormat(mime.as_ptr() as _, width, height) };
+    if fmt.is_null() {
+        bail!("OH_AVFormat_CreateVideoFormat failed");
+    }
+    let ok = unsafe {
+        OH_AVFormat_SetIntValue(fmt, OH_MD_KEY_PIXEL_FORMAT, AV_PIXEL_FORMAT_NV12)
+            && OH_AVFormat_SetIntValue(
+                fmt,
+                OH_MD_KEY_VIDEO_ENCODE_BITRATE_MODE,
+                BITRATE_MODE_CBR,
+            )
+            && OH_AVFormat_SetLongValue(fmt, OH_MD_KEY_BITRATE, bitrate as i64 * 1000)
+            && OH_AVFormat_SetDoubleValue(fmt, OH_MD_KEY_FRAME_RATE, DEFAULT_FPS as f64)
+            && OH_AVFormat_SetIntValue(fmt, OH_MD_KEY_I_FRAME_INTERVAL, gop_ms)
+    };
+    if low_latency && ok {
+        let keys = low_latency_keys();
+        unsafe {
+            let _ = OH_AVFormat_SetIntValue(fmt, keys.enable_low_latency, 1);
+            let _ = OH_AVFormat_SetIntValue(fmt, keys.enable_b_frame, 0);
+            let _ = OH_AVFormat_SetIntValue(fmt, keys.max_b_frames, 0);
+        }
+    }
+    Ok((fmt, ok))
+}
+
 fn mime_for(format: CodecFormat) -> Option<&'static str> {
     match format {
         CodecFormat::H264 => Some("video/avc\0"),
@@ -461,41 +548,60 @@ impl EncoderApi for OhCodecEncoder {
                     }
                     bail!("OH_VideoEncoder_RegisterCallback failed: {rc}");
                 }
-                let fmt = unsafe {
-                    OH_AVFormat_CreateVideoFormat(
-                        mime.as_ptr() as _,
-                        config.width as i32,
-                        config.height as i32,
-                    )
-                };
-                if fmt.is_null() {
-                    unsafe {
-                        OH_VideoEncoder_Destroy(codec);
+                let mut low_latency = true;
+                let (fmt, ok) = match build_encoder_format(
+                    mime,
+                    config.width as i32,
+                    config.height as i32,
+                    bitrate,
+                    gop_ms,
+                    true,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        unsafe {
+                            OH_VideoEncoder_Destroy(codec);
+                        }
+                        return Err(e);
                     }
-                    bail!("OH_AVFormat_CreateVideoFormat failed");
-                }
-                let ok = unsafe {
-                    OH_AVFormat_SetIntValue(fmt, OH_MD_KEY_PIXEL_FORMAT, AV_PIXEL_FORMAT_NV12)
-                        && OH_AVFormat_SetIntValue(
-                            fmt,
-                            OH_MD_KEY_VIDEO_ENCODE_BITRATE_MODE,
-                            BITRATE_MODE_CBR,
-                        )
-                        && OH_AVFormat_SetLongValue(
-                            fmt,
-                            OH_MD_KEY_BITRATE,
-                            bitrate as i64 * 1000,
-                        )
-                        && OH_AVFormat_SetDoubleValue(fmt, OH_MD_KEY_FRAME_RATE, DEFAULT_FPS as f64)
-                        && OH_AVFormat_SetIntValue(fmt, OH_MD_KEY_I_FRAME_INTERVAL, gop_ms)
                 };
-                let rc = if ok {
+                let mut rc = if ok {
                     unsafe { OH_VideoEncoder_Configure(codec, fmt) }
                 } else {
                     AV_ERR_INVALID_STATE
                 };
                 unsafe {
                     OH_AVFormat_Destroy(fmt);
+                }
+                if rc != AV_ERR_OK {
+                    log::warn!(
+                        "OH_VideoEncoder_Configure with low-latency hints failed: {rc}; retrying without hints"
+                    );
+                    low_latency = false;
+                    let (fmt, ok) = match build_encoder_format(
+                        mime,
+                        config.width as i32,
+                        config.height as i32,
+                        bitrate,
+                        gop_ms,
+                        false,
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            unsafe {
+                                OH_VideoEncoder_Destroy(codec);
+                            }
+                            return Err(e);
+                        }
+                    };
+                    rc = if ok {
+                        unsafe { OH_VideoEncoder_Configure(codec, fmt) }
+                    } else {
+                        AV_ERR_INVALID_STATE
+                    };
+                    unsafe {
+                        OH_AVFormat_Destroy(fmt);
+                    }
                 }
                 if rc != AV_ERR_OK {
                     log::error!("OH_VideoEncoder_Configure failed: {rc}");
@@ -540,7 +646,7 @@ impl EncoderApi for OhCodecEncoder {
                     );
                 }
                 log::info!(
-                    "ohcodec encoder created: {}, {}x{}, bitrate {bitrate} kbps, gop {gop_ms} ms",
+                    "ohcodec encoder created: {}, {}x{}, fps {DEFAULT_FPS}, bitrate {bitrate} kbps, gop {gop_ms} ms, low_latency={low_latency}",
                     mime.trim_end_matches('\0'),
                     config.width,
                     config.height

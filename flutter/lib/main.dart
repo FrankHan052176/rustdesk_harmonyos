@@ -200,7 +200,9 @@ Future<void> ohosSessionMain(List<String> args) async {
       await initEnv(kAppTypeConnectionManager);
       await platformFFI.prepareSessionWindow();
       OhosSessionWindow.registerSession('cm', () async {
-        await gFFI.serverModel.closeAll(byOperator: true);
+        if (gFFI.serverModel.clients.isNotEmpty) {
+          await gFFI.serverModel.closeAll(byOperator: true);
+        }
       });
       runApp(App(home: const DesktopServerPage()));
       return;

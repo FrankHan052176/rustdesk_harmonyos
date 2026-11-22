@@ -14,10 +14,11 @@ use crate::common::input::{
     MOUSE_TYPE_MOVE_RELATIVE, MOUSE_TYPE_TRACKPAD, MOUSE_TYPE_UP, MOUSE_TYPE_WHEEL,
 };
 use hbb_common::get_time;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::ffi::{c_char, c_int, c_void};
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
 
 pub const NAME_CURSOR: &'static str = "";
 pub const NAME_POS: &'static str = "mouse_pos";
@@ -180,10 +181,277 @@ static MONITOR_DENIED: AtomicBool = AtomicBool::new(false);
 
 static LAST_CURSOR_X: AtomicI32 = AtomicI32::new(INVALID_CURSOR_POS);
 static LAST_CURSOR_Y: AtomicI32 = AtomicI32::new(INVALID_CURSOR_POS);
+static KEY_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+static KEY_ERR_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
 
 lazy_static::lazy_static! {
     static ref LAST_PEER_INPUT: Mutex<(i32, i64)> = Mutex::new((0, 0));
     static ref PRESSED_MODIFIERS: Mutex<HashSet<i32>> = Mutex::new(HashSet::new());
+}
+
+enum InputOp {
+    MouseMove {
+        x: i32,
+        y: i32,
+    },
+    MouseButton {
+        action: i32,
+        x: i32,
+        y: i32,
+        button: i32,
+        modifiers: Vec<i32>,
+    },
+    MouseScroll {
+        x: i32,
+        y: i32,
+        dx: i32,
+        dy: i32,
+    },
+    Key {
+        code: i32,
+        down: bool,
+        shift: bool,
+        modifiers: Vec<i32>,
+    },
+    KeyPress {
+        code: i32,
+        shift: bool,
+        modifiers: Vec<i32>,
+    },
+    Touch {
+        action: i32,
+        finger_id: i32,
+        x: i32,
+        y: i32,
+    },
+    ReleaseAllModifiers,
+}
+
+#[derive(Default)]
+struct InputQueue {
+    pending_move: Option<(i32, i32)>,
+    ops: VecDeque<InputOp>,
+}
+
+struct InputWorker {
+    queue: Mutex<InputQueue>,
+    cond: Condvar,
+}
+
+static INPUT_WORKER: OnceLock<Arc<InputWorker>> = OnceLock::new();
+
+fn worker() -> &'static Arc<InputWorker> {
+    INPUT_WORKER.get_or_init(|| {
+        let w = Arc::new(InputWorker {
+            queue: Mutex::new(InputQueue::default()),
+            cond: Condvar::new(),
+        });
+        let w_thread = Arc::clone(&w);
+        if let Err(e) = std::thread::Builder::new()
+            .name("ohos-input".into())
+            .spawn(move || input_worker_loop(w_thread))
+        {
+            log::error!("ohos_input: failed to spawn input worker thread: {e}");
+        }
+        w
+    })
+}
+
+fn enqueue_move(x: i32, y: i32) {
+    let w = worker();
+    let mut q = w.queue.lock().unwrap();
+    q.pending_move = Some((x, y));
+    w.cond.notify_one();
+}
+
+fn enqueue_mouse_op(op: InputOp) {
+    let w = worker();
+    let mut q = w.queue.lock().unwrap();
+    if let Some((x, y)) = q.pending_move.take() {
+        q.ops.push_back(InputOp::MouseMove { x, y });
+    }
+    q.ops.push_back(op);
+    w.cond.notify_one();
+}
+
+fn enqueue_op(op: InputOp) {
+    let w = worker();
+    let mut q = w.queue.lock().unwrap();
+    q.ops.push_back(op);
+    w.cond.notify_one();
+}
+
+fn input_worker_loop(w: Arc<InputWorker>) {
+    loop {
+        let (op, pending_move) = {
+            let mut q = w.queue.lock().unwrap();
+            while q.ops.is_empty() && q.pending_move.is_none() {
+                q = w.cond.wait(q).unwrap();
+            }
+            if let Some(op) = q.ops.pop_front() {
+                (Some(op), None)
+            } else {
+                (None, q.pending_move.take())
+            }
+        };
+
+        let Some(api) = api() else {
+            continue;
+        };
+
+        if let Some(op) = op {
+            execute_input_op(api, op);
+        } else if let Some((x, y)) = pending_move {
+            inject_mouse_raw(api, MOUSE_ACTION_MOVE, x, y, OH_MOUSE_BUTTON_NONE, None);
+        }
+    }
+}
+
+fn with_temp_mods<F: FnOnce()>(api: &OhInputApi, modifiers: &[i32], f: F) {
+    let mut temp_mods = Vec::new();
+    for &code in modifiers {
+        if is_modifier_keycode(code) && !PRESSED_MODIFIERS.lock().unwrap().contains(&code) {
+            inject_key_raw(api, code, true);
+            temp_mods.push(code);
+        }
+    }
+    f();
+    for code in temp_mods.into_iter().rev() {
+        inject_key_raw(api, code, false);
+    }
+}
+
+fn execute_input_op(api: &OhInputApi, op: InputOp) {
+    match op {
+        InputOp::MouseMove { x, y } => {
+            inject_mouse_raw(api, MOUSE_ACTION_MOVE, x, y, OH_MOUSE_BUTTON_NONE, None);
+        }
+        InputOp::MouseButton {
+            action,
+            x,
+            y,
+            button,
+            modifiers,
+        } => {
+            with_temp_mods(api, &modifiers, || {
+                inject_mouse_raw(api, action, x, y, button, None);
+            });
+        }
+        InputOp::MouseScroll { x, y, dx, dy } => {
+            if dy != 0 {
+                // Positive dy means scroll up in RustDesk; OHOS positive axis scrolls down.
+                let val = -(dy as f32) * 15.0;
+                inject_mouse_raw(
+                    api,
+                    MOUSE_ACTION_AXIS_BEGIN,
+                    x,
+                    y,
+                    OH_MOUSE_BUTTON_NONE,
+                    Some((MOUSE_AXIS_SCROLL_VERTICAL, 0.0)),
+                );
+                inject_mouse_raw(
+                    api,
+                    MOUSE_ACTION_AXIS_UPDATE,
+                    x,
+                    y,
+                    OH_MOUSE_BUTTON_NONE,
+                    Some((MOUSE_AXIS_SCROLL_VERTICAL, val)),
+                );
+                inject_mouse_raw(
+                    api,
+                    MOUSE_ACTION_AXIS_END,
+                    x,
+                    y,
+                    OH_MOUSE_BUTTON_NONE,
+                    Some((MOUSE_AXIS_SCROLL_VERTICAL, 0.0)),
+                );
+            }
+            if dx != 0 {
+                let val = -(dx as f32) * 15.0;
+                inject_mouse_raw(
+                    api,
+                    MOUSE_ACTION_AXIS_BEGIN,
+                    x,
+                    y,
+                    OH_MOUSE_BUTTON_NONE,
+                    Some((MOUSE_AXIS_SCROLL_HORIZONTAL, 0.0)),
+                );
+                inject_mouse_raw(
+                    api,
+                    MOUSE_ACTION_AXIS_UPDATE,
+                    x,
+                    y,
+                    OH_MOUSE_BUTTON_NONE,
+                    Some((MOUSE_AXIS_SCROLL_HORIZONTAL, val)),
+                );
+                inject_mouse_raw(
+                    api,
+                    MOUSE_ACTION_AXIS_END,
+                    x,
+                    y,
+                    OH_MOUSE_BUTTON_NONE,
+                    Some((MOUSE_AXIS_SCROLL_HORIZONTAL, 0.0)),
+                );
+            }
+        }
+        InputOp::Key {
+            code,
+            down,
+            shift,
+            modifiers,
+        } => {
+            with_temp_mods(api, &modifiers, || {
+                let need_shift = shift
+                    && down
+                    && !PRESSED_MODIFIERS.lock().unwrap().contains(&KEYCODE_SHIFT_LEFT)
+                    && !PRESSED_MODIFIERS.lock().unwrap().contains(&KEYCODE_SHIFT_RIGHT);
+                if need_shift {
+                    inject_key_raw(api, KEYCODE_SHIFT_LEFT, true);
+                }
+                inject_key_raw(api, code, down);
+                if need_shift {
+                    inject_key_raw(api, KEYCODE_SHIFT_LEFT, false);
+                }
+            });
+        }
+        InputOp::KeyPress {
+            code,
+            shift,
+            modifiers,
+        } => {
+            with_temp_mods(api, &modifiers, || {
+                let need_shift = shift
+                    && !PRESSED_MODIFIERS.lock().unwrap().contains(&KEYCODE_SHIFT_LEFT)
+                    && !PRESSED_MODIFIERS.lock().unwrap().contains(&KEYCODE_SHIFT_RIGHT);
+                if need_shift {
+                    inject_key_raw(api, KEYCODE_SHIFT_LEFT, true);
+                }
+                inject_key_raw(api, code, true);
+                std::thread::sleep(Duration::from_millis(2));
+                inject_key_raw(api, code, false);
+                if need_shift {
+                    inject_key_raw(api, KEYCODE_SHIFT_LEFT, false);
+                }
+            });
+        }
+        InputOp::Touch {
+            action,
+            finger_id,
+            x,
+            y,
+        } => {
+            inject_touch_raw(api, action, finger_id, x, y);
+        }
+        InputOp::ReleaseAllModifiers => {
+            let to_release: Vec<i32> = {
+                let mut pressed = PRESSED_MODIFIERS.lock().unwrap();
+                pressed.drain().collect()
+            };
+            for code in to_release {
+                inject_key_raw(api, code, false);
+            }
+        }
+    }
 }
 
 unsafe fn load_sym<T>(handle: *mut c_void, name: &[u8]) -> Option<T> {
@@ -485,11 +753,17 @@ fn inject_key_raw(api: &OhInputApi, keycode: i32, down: bool) {
         }
         let ret = (api.inject_key)(ev);
         if ret != 0 {
-            hbb_common::throttled_log!(
-                std::time::Duration::from_secs(5),
-                warn,
-                "ohos_input: OH_Input_InjectKeyEvent(code={keycode}, down={down}) failed: {ret}"
-            );
+            if KEY_ERR_LOG_COUNT.fetch_add(1, Ordering::Relaxed) < 30 {
+                log::warn!(
+                    "ohos_input: OH_Input_InjectKeyEvent(code={keycode}, down={down}) failed: {ret}"
+                );
+            } else {
+                hbb_common::throttled_log!(
+                    std::time::Duration::from_secs(5),
+                    warn,
+                    "ohos_input: OH_Input_InjectKeyEvent(code={keycode}, down={down}) failed: {ret}"
+                );
+            }
         }
         (api.destroy_key)(&mut ev);
     }
@@ -535,16 +809,10 @@ fn is_modifier_keycode(code: i32) -> bool {
 }
 
 pub fn release_all_modifiers() {
-    let Some(api) = api() else {
+    if api().is_none() || INPUT_WORKER.get().is_none() {
         return;
-    };
-    let to_release: Vec<i32> = {
-        let mut pressed = PRESSED_MODIFIERS.lock().unwrap();
-        pressed.drain().collect()
-    };
-    for code in to_release {
-        inject_key_raw(api, code, false);
     }
+    enqueue_op(InputOp::ReleaseAllModifiers);
 }
 
 fn clamp_to_screen(x: i32, y: i32) -> (i32, i32) {
@@ -565,31 +833,29 @@ fn map_mouse_button(buttons: i32) -> i32 {
     }
 }
 
-pub fn handle_mouse(evt: &MouseEvent, conn: i32) {
-    if !is_ohos_input_authorized() {
-        return;
-    }
-    let Some(api) = api() else {
-        return;
-    };
-    let evt_type = evt.mask & MOUSE_TYPE_MASK;
-    let buttons = evt.mask >> 3;
-
-    let mut temp_mods = Vec::new();
-    if evt_type == MOUSE_TYPE_DOWN {
-        for m in &evt.modifiers {
-            if let Ok(ck) = m.enum_value() {
-                if let Some(code) = control_key_to_ohos(ck) {
-                    if is_modifier_keycode(code)
-                        && !PRESSED_MODIFIERS.lock().unwrap().contains(&code)
-                    {
-                        inject_key_raw(api, code, true);
-                        temp_mods.push(code);
-                    }
+fn collect_modifiers(modifiers: &[hbb_common::protobuf::EnumOrUnknown<ControlKey>]) -> Vec<i32> {
+    let mut mods = Vec::new();
+    for m in modifiers {
+        if let Ok(ck) = m.enum_value() {
+            if let Some(code) = control_key_to_ohos(ck) {
+                if is_modifier_keycode(code) {
+                    mods.push(code);
                 }
             }
         }
     }
+    mods
+}
+
+pub fn handle_mouse(evt: &MouseEvent, conn: i32) {
+    if !is_ohos_input_authorized() {
+        return;
+    }
+    if api().is_none() {
+        return;
+    }
+    let evt_type = evt.mask & MOUSE_TYPE_MASK;
+    let buttons = evt.mask >> 3;
 
     match evt_type {
         MOUSE_TYPE_MOVE => {
@@ -597,7 +863,7 @@ pub fn handle_mouse(evt: &MouseEvent, conn: i32) {
             LAST_CURSOR_X.store(x, Ordering::Relaxed);
             LAST_CURSOR_Y.store(y, Ordering::Relaxed);
             *LAST_PEER_INPUT.lock().unwrap() = (conn, get_time());
-            inject_mouse_raw(api, MOUSE_ACTION_MOVE, x, y, OH_MOUSE_BUTTON_NONE, None);
+            enqueue_move(x, y);
         }
         MOUSE_TYPE_MOVE_RELATIVE => {
             const MAX_DELTA: i32 = 10000;
@@ -611,7 +877,7 @@ pub fn handle_mouse(evt: &MouseEvent, conn: i32) {
             LAST_CURSOR_X.store(x, Ordering::Relaxed);
             LAST_CURSOR_Y.store(y, Ordering::Relaxed);
             *LAST_PEER_INPUT.lock().unwrap() = (conn, get_time());
-            inject_mouse_raw(api, MOUSE_ACTION_MOVE, x, y, OH_MOUSE_BUTTON_NONE, None);
+            enqueue_move(x, y);
         }
         MOUSE_TYPE_DOWN | MOUSE_TYPE_UP => {
             let btn = map_mouse_button(buttons);
@@ -628,7 +894,18 @@ pub fn handle_mouse(evt: &MouseEvent, conn: i32) {
                 } else {
                     MOUSE_ACTION_BUTTON_UP
                 };
-                inject_mouse_raw(api, action, x, y, btn, None);
+                let modifiers = if evt_type == MOUSE_TYPE_DOWN {
+                    collect_modifiers(&evt.modifiers)
+                } else {
+                    Vec::new()
+                };
+                enqueue_mouse_op(InputOp::MouseButton {
+                    action,
+                    x,
+                    y,
+                    button: btn,
+                    modifiers,
+                });
             }
         }
         MOUSE_TYPE_WHEEL | MOUSE_TYPE_TRACKPAD => {
@@ -636,67 +913,16 @@ pub fn handle_mouse(evt: &MouseEvent, conn: i32) {
             let cy = LAST_CURSOR_Y.load(Ordering::Relaxed);
             let x = if cx == INVALID_CURSOR_POS { 0 } else { cx };
             let y = if cy == INVALID_CURSOR_POS { 0 } else { cy };
-            if evt.y != 0 {
-                // Positive evt.y means scroll up in RustDesk; OHOS positive axis scrolls down.
-                let val = -(evt.y as f32) * 15.0;
-                inject_mouse_raw(
-                    api,
-                    MOUSE_ACTION_AXIS_BEGIN,
+            if evt.y != 0 || evt.x != 0 {
+                enqueue_mouse_op(InputOp::MouseScroll {
                     x,
                     y,
-                    OH_MOUSE_BUTTON_NONE,
-                    Some((MOUSE_AXIS_SCROLL_VERTICAL, 0.0)),
-                );
-                inject_mouse_raw(
-                    api,
-                    MOUSE_ACTION_AXIS_UPDATE,
-                    x,
-                    y,
-                    OH_MOUSE_BUTTON_NONE,
-                    Some((MOUSE_AXIS_SCROLL_VERTICAL, val)),
-                );
-                inject_mouse_raw(
-                    api,
-                    MOUSE_ACTION_AXIS_END,
-                    x,
-                    y,
-                    OH_MOUSE_BUTTON_NONE,
-                    Some((MOUSE_AXIS_SCROLL_VERTICAL, 0.0)),
-                );
-            }
-            if evt.x != 0 {
-                let val = -(evt.x as f32) * 15.0;
-                inject_mouse_raw(
-                    api,
-                    MOUSE_ACTION_AXIS_BEGIN,
-                    x,
-                    y,
-                    OH_MOUSE_BUTTON_NONE,
-                    Some((MOUSE_AXIS_SCROLL_HORIZONTAL, 0.0)),
-                );
-                inject_mouse_raw(
-                    api,
-                    MOUSE_ACTION_AXIS_UPDATE,
-                    x,
-                    y,
-                    OH_MOUSE_BUTTON_NONE,
-                    Some((MOUSE_AXIS_SCROLL_HORIZONTAL, val)),
-                );
-                inject_mouse_raw(
-                    api,
-                    MOUSE_ACTION_AXIS_END,
-                    x,
-                    y,
-                    OH_MOUSE_BUTTON_NONE,
-                    Some((MOUSE_AXIS_SCROLL_HORIZONTAL, 0.0)),
-                );
+                    dx: evt.x,
+                    dy: evt.y,
+                });
             }
         }
         _ => {}
-    }
-
-    for code in temp_mods.into_iter().rev() {
-        inject_key_raw(api, code, false);
     }
 }
 
@@ -704,22 +930,37 @@ pub fn handle_pointer(evt: &PointerDeviceEvent, _conn: i32) {
     if !is_ohos_input_authorized() {
         return;
     }
-    let Some(api) = api() else {
+    if api().is_none() {
         return;
-    };
+    }
     if let Some(pointer_device_event::Union::TouchEvent(touch)) = &evt.union {
         match &touch.union {
             Some(touch_event::Union::PanStart(p)) => {
                 let (x, y) = clamp_to_screen(p.x, p.y);
-                inject_touch_raw(api, TOUCH_ACTION_DOWN, 0, x, y);
+                enqueue_op(InputOp::Touch {
+                    action: TOUCH_ACTION_DOWN,
+                    finger_id: 0,
+                    x,
+                    y,
+                });
             }
             Some(touch_event::Union::PanUpdate(p)) => {
                 let (x, y) = clamp_to_screen(p.x, p.y);
-                inject_touch_raw(api, TOUCH_ACTION_MOVE, 0, x, y);
+                enqueue_op(InputOp::Touch {
+                    action: TOUCH_ACTION_MOVE,
+                    finger_id: 0,
+                    x,
+                    y,
+                });
             }
             Some(touch_event::Union::PanEnd(p)) => {
                 let (x, y) = clamp_to_screen(p.x, p.y);
-                inject_touch_raw(api, TOUCH_ACTION_UP, 0, x, y);
+                enqueue_op(InputOp::Touch {
+                    action: TOUCH_ACTION_UP,
+                    finger_id: 0,
+                    x,
+                    y,
+                });
             }
             _ => {}
         }
@@ -730,84 +971,109 @@ pub fn handle_key(evt: &KeyEvent) {
     if !is_ohos_input_authorized() {
         return;
     }
-    let Some(api) = api() else {
+    if api().is_none() {
         return;
-    };
-
-    let mut temp_mods = Vec::new();
-    if evt.down || evt.press {
-        for m in &evt.modifiers {
-            if let Ok(ck) = m.enum_value() {
-                if let Some(code) = control_key_to_ohos(ck) {
-                    if is_modifier_keycode(code)
-                        && !PRESSED_MODIFIERS.lock().unwrap().contains(&code)
-                    {
-                        inject_key_raw(api, code, true);
-                        temp_mods.push(code);
-                    }
-                }
-            }
-        }
     }
 
-    match &evt.union {
+    let is_unicode_or_seq = matches!(
+        &evt.union,
+        Some(key_event::Union::Unicode(_)) | Some(key_event::Union::Seq(_))
+    );
+    let modifiers = if evt.down || evt.press || is_unicode_or_seq {
+        collect_modifiers(&evt.modifiers)
+    } else {
+        Vec::new()
+    };
+
+    let should_log = KEY_LOG_COUNT.fetch_add(1, Ordering::Relaxed) < 30;
+    let mut resolved: Vec<(i32, bool, bool, bool)> = Vec::new();
+    let union_summary = match &evt.union {
         Some(key_event::Union::ControlKey(ck)) => {
             if let Ok(key) = ck.enum_value() {
                 if let Some(code) = control_key_to_ohos(key) {
-                    emit_key(api, code, false, evt.down, evt.press);
+                    resolved.push((code, false, evt.down, evt.press));
                 }
             }
+            format!("ControlKey({:?})", ck.enum_value())
         }
         Some(key_event::Union::Chr(code)) => {
-            if evt.mode.enum_value() == Ok(KeyboardMode::Map) {
-                let rdev_key = crate::keyboard::keycode_to_rdev_key(*code);
-                if let Some(oh_code) = rdev_key_to_ohos(rdev_key) {
-                    emit_key(api, oh_code, false, evt.down, evt.press);
+            let masked = *code & 0xFFFF;
+            match evt.mode.enum_value() {
+                Ok(KeyboardMode::Map) | Ok(KeyboardMode::Translate) => {
+                    let mut rdev_key = crate::keyboard::keycode_to_rdev_key(masked);
+                    if matches!(rdev_key, rdev::Key::Unknown(_)) {
+                        rdev_key = rdev::usb_hid_key_from_code(masked);
+                    }
+                    if let Some(oh_code) = rdev_key_to_ohos(rdev_key) {
+                        resolved.push((oh_code, false, evt.down, evt.press));
+                    } else if *code >= 0x20 && *code <= 0x7E {
+                        if let Some(ch) = char::from_u32(masked) {
+                            if let Some((oh_code, shift)) = ascii_char_to_ohos(ch) {
+                                resolved.push((oh_code, shift, evt.down, evt.press));
+                            }
+                        }
+                    }
                 }
-            } else if let Some(ch) = char::from_u32(*code & 0xFFFF) {
-                if let Some((oh_code, shift)) = ascii_char_to_ohos(ch) {
-                    emit_key(api, oh_code, shift, evt.down, evt.press);
+                _ => {
+                    if let Some(ch) = char::from_u32(masked) {
+                        if let Some((oh_code, shift)) = ascii_char_to_ohos(ch) {
+                            resolved.push((oh_code, shift, evt.down, evt.press));
+                        }
+                    }
                 }
             }
+            format!("Chr(0x{code:x})")
         }
         Some(key_event::Union::Unicode(code)) => {
             if let Some(ch) = char::from_u32(*code) {
                 if let Some((oh_code, shift)) = ascii_char_to_ohos(ch) {
-                    emit_key(api, oh_code, shift, true, true);
+                    resolved.push((oh_code, shift, true, true));
                 }
             }
+            format!("Unicode(0x{code:x})")
         }
         Some(key_event::Union::Seq(seq)) => {
             for ch in seq.chars() {
                 if let Some((oh_code, shift)) = ascii_char_to_ohos(ch) {
-                    emit_key(api, oh_code, shift, true, true);
+                    resolved.push((oh_code, shift, true, true));
                 }
             }
+            format!("Seq(len={})", seq.len())
         }
-        _ => {}
+        _ => "Other".to_owned(),
+    };
+
+    if should_log {
+        let oh_codes: Vec<i32> = resolved.iter().map(|(c, _, _, _)| *c).collect();
+        log::info!(
+            "ohos_input: handle_key mode={:?} down={} press={} union={} oh_code={:?}",
+            evt.mode.enum_value(),
+            evt.down,
+            evt.press,
+            union_summary,
+            oh_codes
+        );
     }
 
-    for code in temp_mods.into_iter().rev() {
-        inject_key_raw(api, code, false);
+    for (code, shift, down, press) in resolved {
+        enqueue_key_op(code, shift, down, press, modifiers.clone());
     }
 }
 
-fn emit_key(api: &OhInputApi, code: i32, shift: bool, down: bool, press: bool) {
-    let need_shift = shift
-        && (down || press)
-        && !PRESSED_MODIFIERS.lock().unwrap().contains(&KEYCODE_SHIFT_LEFT)
-        && !PRESSED_MODIFIERS.lock().unwrap().contains(&KEYCODE_SHIFT_RIGHT);
-    if need_shift {
-        inject_key_raw(api, KEYCODE_SHIFT_LEFT, true);
-    }
+fn enqueue_key_op(code: i32, shift: bool, down: bool, press: bool, modifiers: Vec<i32>) {
     if press {
-        inject_key_raw(api, code, true);
-        inject_key_raw(api, code, false);
+        enqueue_op(InputOp::KeyPress {
+            code,
+            shift,
+            modifiers,
+        });
     } else {
-        inject_key_raw(api, code, down);
-    }
-    if need_shift {
-        inject_key_raw(api, KEYCODE_SHIFT_LEFT, false);
+        enqueue_op(InputOp::Key {
+            code,
+            down,
+            shift,
+            modifiers,
+        });
     }
 }
 
@@ -986,7 +1252,13 @@ fn rdev_key_to_ohos(key: rdev::Key) -> Option<i32> {
         Key::KpMinus => KEYCODE_NUMPAD_SUBTRACT,
         Key::KpPlus => KEYCODE_NUMPAD_ADD,
         Key::KpDecimal => KEYCODE_NUMPAD_DOT,
+        Key::KpComma => KEYCODE_NUMPAD_COMMA,
         Key::KpReturn => KEYCODE_NUMPAD_ENTER,
+        Key::KpEqual => KEYCODE_NUMPAD_EQUALS,
+        Key::VolumeUp => KEYCODE_VOLUME_UP,
+        Key::VolumeDown => KEYCODE_VOLUME_DOWN,
+        Key::VolumeMute => KEYCODE_VOLUME_MUTE,
+        Key::Cancel => KEYCODE_BACK,
         _ => return None,
     })
 }
@@ -999,6 +1271,9 @@ fn ascii_char_to_ohos(ch: char) -> Option<(i32, bool)> {
         ' ' => Some((KEYCODE_SPACE, false)),
         '\n' | '\r' => Some((KEYCODE_ENTER, false)),
         '\t' => Some((KEYCODE_TAB, false)),
+        '\x08' => Some((KEYCODE_DEL, false)),
+        '\x7f' => Some((KEYCODE_FORWARD_DEL, false)),
+        '\x1b' => Some((KEYCODE_ESCAPE, false)),
         '`' => Some((KEYCODE_GRAVE, false)),
         '~' => Some((KEYCODE_GRAVE, true)),
         '!' => Some((KEYCODE_0 + 1, true)),
