@@ -10,15 +10,15 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "RustDesk Unofficial"
+      "value": "RustDesk"
     },
     {
       "name": "READ_PASTEBOARD_reason",
-      "value": "允许 RustDesk Unofficial 与已授权的远程桌面会话同步剪贴板文本。"
+      "value": "允许 RustDesk 与已授权的远程桌面会话同步剪贴板文本。"
     },
     {
       "name": "CUSTOM_SCREEN_RECORDING_reason",
-      "value": "允许 RustDesk Unofficial 在开启受控端屏幕共享时免除重复隐私确认弹窗。"
+      "value": "允许 RustDesk 在开启受控端屏幕共享时免除重复隐私确认弹窗。"
     },
     {
       "name": "CONTROL_DEVICE_reason",

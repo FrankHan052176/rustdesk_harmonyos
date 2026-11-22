@@ -10,15 +10,15 @@
     },
     {
       "name": "EntryAbility_label",
-      "value": "RustDesk Unofficial"
+      "value": "RustDesk"
     },
     {
       "name": "READ_PASTEBOARD_reason",
-      "value": "Allow RustDesk Unofficial to synchronize clipboard text with authorized remote desktop sessions."
+      "value": "Allow RustDesk to synchronize clipboard text with authorized remote desktop sessions."
     },
     {
       "name": "CUSTOM_SCREEN_RECORDING_reason",
-      "value": "Allow RustDesk Unofficial to start controlled-side screen sharing without repeated privacy alerts."
+      "value": "Allow RustDesk to start controlled-side screen sharing without repeated privacy alerts."
     },
     {
       "name": "CONTROL_DEVICE_reason",

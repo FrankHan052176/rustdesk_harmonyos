@@ -3943,13 +3943,6 @@ class _LogoState extends State<_Logo> {
 Widget loadLogo() => const _Logo();
 
 Widget loadIcon(double size) {
-  if (isOhos) {
-    return SvgPicture.asset(
-      'assets/ohos_icon.svg',
-      width: size,
-      height: size,
-    );
-  }
   return Image.asset('assets/icon.png',
       width: size,
       height: size,
