@@ -532,7 +532,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Open in new window", "Apri in una nuova finestra"),
         ("Show displays as individual windows", "Visualizza schermi come finestre individuali"),
         ("Use all my displays for the remote session", "Nella sessione remota usa tutti gli schermi"),
-        ("selinux_tip", "In questo dispositivo è abilitato SELinux, che potrebbe impedire il corretto funzionamento di RustDesk come lato controllato."),
         ("Change view", "Modifica vista"),
         ("Big tiles", "Icone grandi"),
         ("Small tiles", "Icone piccole"),
@@ -826,5 +825,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("install-directory-not-empty-tip", "La cartella selezionata non è vuota. L'installazione potrebbe eliminare i dati esistenti. Valuta la possibilità di scegliere una cartella diversa."),
         ("Request approval", "Richiedi approvazione"),
         ("Forever", "Per sempre"),
-    ].iter().cloned().collect();
+        ("username-login-disabled-oidc-unavailable", "L'accesso con utente e password è disabilitato e non sono disponibili metodi di accesso OIDC."),
+        ("Use DRM screen capture", "Usa cattura schermo DRM"),
+        ("drm-capture-tip", "Cattura lo schermo direttamente dalla scheda grafica tramite il servizio RustDesk, senza il prompt di condivisione dello schermo Wayland, anche al login schermo. Potrebbe non funzionare con tutti i dispositivi; se le connessioni chiedono ancora di condividere lo schermo, disabilita questa opzione o usa X11. La modifica di questa opzione disconnetterà le sessioni attuali."),
+        ("wayland-drm-tip", "Per l'accesso non presidiato in Wayland, prova 'Cattura schermo DRM', o se non funziona usa X11."),
+        ("login-wayland-drm-tip", "Per accedere alla schermata di accesso Wayland, prova 'Cattura schermo DRM' o passa a X11."),
+   ].iter().cloned().collect();
 }

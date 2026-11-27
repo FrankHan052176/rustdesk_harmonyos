@@ -11,6 +11,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../common.dart';
+import '../../consts.dart';
 import './dialog.dart';
 import './oidc_auth_status.dart';
 
@@ -721,11 +722,16 @@ Future<bool?> _openLoginDialogOnce() async {
 }
 
 Future<bool?> _openLoginDialog() async {
+  final hideAccountPasswordLogin =
+      bind.mainGetBuildinOption(key: kOptionHideAccountPasswordLogin) == 'Y';
   var username =
       TextEditingController(text: UserModel.getLocalUserInfo()?['name'] ?? '');
   var password = TextEditingController();
-  final userFocusNode = FocusNode()..requestFocus();
-  Timer(Duration(milliseconds: 100), () => userFocusNode..requestFocus());
+  final userFocusNode = FocusNode();
+  if (!hideAccountPasswordLogin) {
+    userFocusNode.requestFocus();
+    Timer(Duration(milliseconds: 100), () => userFocusNode..requestFocus());
+  }
 
   String? usernameMsg;
   String? passwordMsg;
@@ -737,7 +743,7 @@ Future<bool?> _openLoginDialog() async {
 
   final loginOptions = [].obs;
   final loginOptionsError = Rxn<Object>();
-  final loginOptionsInProgress = false.obs;
+  final loginOptionsInProgress = hideAccountPasswordLogin.obs;
   fetchLoginOptions() async {
     loginOptionsInProgress.value = true;
     try {
@@ -888,6 +894,14 @@ Future<bool?> _openLoginDialog() async {
               ],
             );
           }
+          if (hideAccountPasswordLogin && loginOptions.isEmpty) {
+            return Column(children: [
+              if (inProgress)
+                const LinearProgressIndicator()
+              else
+                Text(translate('username-login-disabled-oidc-unavailable')),
+            ]);
+          }
           return Offstage(
             offstage: loginOptions.isEmpty,
             child: Column(
@@ -895,11 +909,12 @@ Future<bool?> _openLoginDialog() async {
                 const SizedBox(
                   height: 8.0,
                 ),
-                Center(
-                    child: Text(
-                  translate('or'),
-                  style: TextStyle(fontSize: 16),
-                )),
+                if (!hideAccountPasswordLogin)
+                  Center(
+                      child: Text(
+                    translate('or'),
+                    style: TextStyle(fontSize: 16),
+                  )),
                 const SizedBox(
                   height: 8.0,
                 ),
@@ -976,21 +991,22 @@ Future<bool?> _openLoginDialog() async {
           const SizedBox(
             height: 8.0,
           ),
-          LoginWidgetUserPass(
-            username: username,
-            pass: password,
-            usernameMsg: usernameMsg,
-            passMsg: passwordMsg,
-            isInProgress: isInProgress,
-            curOP: curOP,
-            onLogin: onLogin,
-            userFocusNode: userFocusNode,
-          ),
+          if (!hideAccountPasswordLogin)
+            LoginWidgetUserPass(
+              username: username,
+              pass: password,
+              usernameMsg: usernameMsg,
+              passMsg: passwordMsg,
+              isInProgress: isInProgress,
+              curOP: curOP,
+              onLogin: onLogin,
+              userFocusNode: userFocusNode,
+            ),
           thirdAuthWidget(),
         ],
       ),
       onCancel: onDialogCancel,
-      onSubmit: onLogin,
+      onSubmit: hideAccountPasswordLogin ? null : onLogin,
     );
   }).whenComplete(oidcAuth.close);
 
